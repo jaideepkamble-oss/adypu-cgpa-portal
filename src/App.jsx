@@ -1,0 +1,1183 @@
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Routes, Route, useLocation, useNavigate } from 'react-router-dom';
+import Chart from 'chart.js/auto';
+import { jsPDF } from 'jspdf';
+import './styles.css';
+import { Field, MetricCard, SelectField } from './components/ui.jsx';
+const storage = {
+      get(key, fallback) {
+        try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; }
+      },
+      set(key, value) { localStorage.setItem(key, JSON.stringify(value)); }
+    };
+
+    const defaultGrades = [
+      { min: 108, max: 120, grade: 'A+', gp: 10 },
+      { min: 96, max: 107, grade: 'A', gp: 9 },
+      { min: 84, max: 95, grade: 'B+', gp: 8 },
+      { min: 72, max: 83, grade: 'B', gp: 7 },
+      { min: 60, max: 71, grade: 'C+', gp: 6 },
+      { min: 48, max: 59, grade: 'C', gp: 5 },
+      { min: 36, max: 47, grade: 'D', gp: 4 },
+      { min: 0, max: 35, grade: 'F', gp: 0 }
+    ];
+
+    const initialCurriculum = {
+      'Computer Engineering': {
+        1: [
+          { id: 'sem1-math', name: 'Engineering Mathematics I', credits: 4 },
+          { id: 'sem1-physics', name: 'Engineering Physics', credits: 3 },
+          { id: 'sem1-c', name: 'Programming Fundamentals', credits: 4 },
+          { id: 'sem1-workshop', name: 'Engineering Workshop', credits: 2 }
+        ],
+        2: [
+          { id: 'sem2-math', name: 'Engineering Mathematics II', credits: 4 },
+          { id: 'sem2-electronics', name: 'Basic Electronics', credits: 3 },
+          { id: 'sem2-ds', name: 'Data Structures', credits: 4 },
+          { id: 'sem2-comm', name: 'Communication Skills', credits: 2 }
+        ],
+        3: [
+          { id: 'sem3-dbms', name: 'Database Management Systems', credits: 4 },
+          { id: 'sem3-oop', name: 'Object Oriented Programming', credits: 4 },
+          { id: 'sem3-os', name: 'Operating Systems', credits: 3 },
+          { id: 'sem3-math', name: 'Discrete Mathematics', credits: 3 }
+        ],
+        4: [
+          { id: 'sem4-cn', name: 'Computer Networks', credits: 4 },
+          { id: 'sem4-se', name: 'Software Engineering', credits: 3 },
+          { id: 'sem4-java', name: 'Advanced Java', credits: 4 },
+          { id: 'sem4-web', name: 'Web Technologies', credits: 3 }
+        ],
+        5: [
+          { id: 'sem5-ml', name: 'Machine Learning', credits: 4 },
+          { id: 'sem5-da', name: 'Data Analytics', credits: 3 },
+          { id: 'sem5-iot', name: 'Internet of Things', credits: 3 },
+          { id: 'sem5-mobile', name: 'Mobile Application Development', credits: 3 }
+        ],
+        6: [
+          { id: 'sem6-cyber', name: 'Cyber Security', credits: 4 },
+          { id: 'sem6-devops', name: 'DevOps', credits: 3 },
+          { id: 'sem6-hci', name: 'Human Computer Interaction', credits: 3 },
+          { id: 'sem6-project', name: 'Mini Project', credits: 4 }
+        ],
+        7: [
+          { id: 'sem7-ai', name: 'AI', credits: 4 },
+          { id: 'sem7-cloud', name: 'Cloud Computing', credits: 4 },
+          { id: 'sem7-bigdata', name: 'Big Data', credits: 3 },
+          { id: 'sem7-elective', name: 'Elective', credits: 3 },
+          { id: 'sem7-project', name: 'Project', credits: 3 }
+        ],
+        8: [
+          { id: 'sem8-blockchain', name: 'Blockchain Technology', credits: 3 },
+          { id: 'sem8-ethics', name: 'Professional Ethics', credits: 2 },
+          { id: 'sem8-project', name: 'Major Project', credits: 8 },
+          { id: 'sem8-seminar', name: 'Research Seminar', credits: 2 }
+        ]
+      },
+      'Artificial Intelligence & Data Science': {
+        7: [
+          { id: 'aids7-dl', name: 'Deep Learning', credits: 4 },
+          { id: 'aids7-nlp', name: 'Natural Language Processing', credits: 3 },
+          { id: 'aids7-mlo', name: 'MLOps', credits: 3 },
+          { id: 'aids7-elective', name: 'AI Elective', credits: 4 }
+        ]
+      }
+    };
+
+    const features = ['SGPA Calculator', 'CGPA Calculator', 'Marks Predictor', 'Grade Predictor', 'Previous Year Papers', 'AI Academic Assistant', 'PDF Report Download', 'Semester Planning'];
+    const branches = ['Computer Engineering', 'Artificial Intelligence & Data Science', 'Mechanical Engineering', 'Civil Engineering', 'Design', 'Management'];
+    const years = ['First Year', 'Second Year', 'Third Year', 'Fourth Year'];
+
+    function gradeForMarks(marks, rules = defaultGrades) {
+      const safeMarks = Math.max(0, Math.min(120, Number(marks) || 0));
+      return rules.find(rule => safeMarks >= rule.min && safeMarks <= rule.max) || rules[rules.length - 1];
+    }
+
+    function calculateSgpa(subjects, marks, rules) {
+      const totalCredits = subjects.reduce((sum, subject) => sum + Number(subject.credits || 0), 0);
+      const earned = subjects.reduce((sum, subject) => {
+        const m = marks[subject.id] || {};
+        const total = Number(m.unit || 0) + Number(m.mid || 0) + Number(m.end || 0);
+        return sum + Number(subject.credits || 0) * gradeForMarks(total, rules).gp;
+      }, 0);
+      return totalCredits ? earned / totalCredits : 0;
+    }
+
+    function calculateCgpa(history) {
+      const valid = history.filter(row => Number(row.sgpa) > 0 && Number(row.credits) > 0);
+      const credits = valid.reduce((sum, row) => sum + Number(row.credits), 0);
+      const weighted = valid.reduce((sum, row) => sum + Number(row.sgpa) * Number(row.credits), 0);
+      return { cgpa: credits ? weighted / credits : 0, credits };
+    }
+
+    function minimumMarksForGp(gp, rules = defaultGrades) {
+      const match = [...rules].sort((a, b) => a.gp - b.gp).find(rule => rule.gp >= gp);
+      return match ? match.min : 120;
+    }
+
+    function clamp(value, min, max) {
+      return Math.min(max, Math.max(min, value));
+    }
+
+    const semestersByYear = {
+      'First Year': ['1', '2'],
+      'Second Year': ['3', '4'],
+      'Third Year': ['5', '6'],
+      'Fourth Year': ['7', '8']
+    };
+
+    const demoLeaderboardSeed = [
+      { id: 'demo-1', name: 'Riya Sharma', prn: 'PRN202401', branch: 'Computer Engineering', year: 'Third Year', semester: '6', actualCgpa: 9.32, credits: 136, verified: true },
+      { id: 'demo-2', name: 'Aarav Patil', prn: 'PRN202402', branch: 'Computer Engineering', year: 'Third Year', semester: '6', actualCgpa: 9.08, credits: 134, verified: true },
+      { id: 'demo-3', name: 'Meera Joshi', prn: 'PRN202403', branch: 'Artificial Intelligence & Data Science', year: 'Fourth Year', semester: '7', actualCgpa: 8.96, credits: 158, verified: true },
+      { id: 'demo-4', name: 'Kabir Rao', prn: 'PRN202404', branch: 'Computer Engineering', year: 'Fourth Year', semester: '7', actualCgpa: 8.74, credits: 158, verified: true }
+    ];
+
+    function strongPasswordMessage(password) {
+      if (!password || password.length < 8) return 'Password must be at least 8 characters.';
+      if (!/[A-Z]/.test(password)) return 'Password must include one uppercase letter.';
+      if (!/[a-z]/.test(password)) return 'Password must include one lowercase letter.';
+      if (!/[0-9]/.test(password)) return 'Password must include one number.';
+      if (!/[^A-Za-z0-9]/.test(password)) return 'Password must include one special character.';
+      return '';
+    }
+
+    function studentKey(user, profile) {
+      return profile?.prn || user?.uid || user?.email || 'demo-student';
+    }
+
+    function marksKey(profile, subjectId) {
+      return `${profile?.branch || 'Computer Engineering'}|${profile?.semester || 7}|${subjectId}`;
+    }
+
+    function getStudentMarks(allMarks, user, profile) {
+      const key = studentKey(user, profile);
+      return allMarks[key] || {};
+    }
+
+    function calculateUpdatedCgpa(actualCgpa, previousCredits, currentSgpa, currentCredits) {
+      const oldCredits = Number(previousCredits) || 0;
+      const newCredits = Number(currentCredits) || 0;
+      const oldCgpa = Number(actualCgpa) || 0;
+      if (!newCredits && !oldCredits) return 0;
+      return ((oldCgpa * oldCredits) + (Number(currentSgpa || 0) * newCredits)) / (oldCredits + newCredits);
+    }
+
+    async function firebaseAuthAction(type, payload) {
+      // Firebase is intentionally not implemented in this Vite migration.
+      // This local auth shim preserves the existing UI flow until Firebase is added later.
+      if (type === 'register' || type === 'login' || type === 'google') {
+        return {
+          uid: payload.email || 'local-google-user',
+          email: payload.email || 'student.google@adypu.edu.in',
+          displayName: payload.name || 'ADYPU Student'
+        };
+      }
+      return null;
+    }
+
+    function previousSemesterText(semester) {
+      const sem = Number(semester || 1);
+      if (sem <= 1) return 'Semester 1';
+      return `Semester ${sem - 1}`;
+    }
+
+    function buildVerificationEmail({ name, email }) {
+      const loginLink = window.location.origin + '/auth';
+      return {
+        sender: 'ADYPU CGPA Portal',
+        to: email,
+        subject: 'Welcome to ADYPU CGPA Portal',
+        html: `
+          <div style="font-family:Inter,Arial,sans-serif;background:#f5f0e6;padding:28px;color:#17313B">
+            <div style="max-width:640px;margin:auto;background:white;border-radius:24px;overflow:hidden;box-shadow:0 24px 70px rgba(23,49,59,.16)">
+              <div style="background:linear-gradient(135deg,#17313B,#00BCD4);padding:30px;color:white">
+                <div style="font-weight:900;font-size:24px">ADYPU CGPA Portal</div>
+                <p style="margin:8px 0 0">Professional academic analytics for ADYPU students</p>
+              </div>
+              <div style="padding:30px">
+                <h1 style="margin:0 0 10px;font-size:28px">Welcome, ${name || 'Student'}!</h1>
+                <p>Thank you for registering with ADYPU CGPA Portal. You can calculate SGPA, track CGPA, plan future targets, access reports, and use academic tools from one secure dashboard.</p>
+                <a href="${loginLink}" style="display:inline-block;margin:20px 0;background:#00BCD4;color:white;text-decoration:none;padding:13px 20px;border-radius:12px;font-weight:800">Verify / Login</a>
+                <p style="font-size:14px">Direct Login Link: <a href="${loginLink}">${loginLink}</a></p>
+                <p style="font-size:14px">Support Email: support@adypu-cgpa-portal.edu</p>
+              </div>
+              <div style="background:#F5F0E6;padding:18px 30px;font-size:12px;color:#2F5D68">ADYPU CGPA Portal - Academic performance, predictions, and verified student records.</div>
+            </div>
+          </div>`
+      };
+    }
+
+    function sendWelcomeVerificationEmail(payload) {
+      const email = buildVerificationEmail(payload);
+      storage.set(`portal:verificationEmail:${payload.email}`, email);
+      return email;
+    }
+
+    function AppShell() {
+      const navigate = useNavigate();
+      const location = useLocation();
+      const routeFromPath = location.pathname.replace(/^\//, '') || 'landing';
+      const route = routeFromPath;
+      const [user, setUser] = useState(storage.get('portal:user', null));
+      const [profile, setProfile] = useState(storage.get('portal:profile', null));
+      const [curriculum, setCurriculum] = useState(storage.get('portal:curriculum', initialCurriculum));
+      const [grades, setGrades] = useState(storage.get('portal:grades', defaultGrades));
+      const [history, setHistory] = useState(storage.get('portal:history', Array.from({ length: 6 }, (_, i) => ({ sem: i + 1, sgpa: '', credits: '' }))));
+      const [allMarks, setAllMarks] = useState(storage.get('portal:studentMarks', {}));
+      const [verificationRequests, setVerificationRequests] = useState(storage.get('portal:verificationRequests', []));
+      const [leaderboardStudents, setLeaderboardStudents] = useState(storage.get('portal:leaderboardStudents', demoLeaderboardSeed));
+      const [paperRequests, setPaperRequests] = useState(storage.get('portal:paperRequests', []));
+      const [questionPapers, setQuestionPapers] = useState(storage.get('portal:questionPapers', []));
+      const [targetCgpa, setTargetCgpa] = useState(storage.get('portal:target', 8.5));
+      const [chat, setChat] = useState(storage.get('portal:chat', [
+        { role: 'assistant', text: 'Hi. Share your target SGPA or concern, and I will build a study roadmap around your current subjects and CGPA.' }
+      ]));
+      const [authMode, setAuthMode] = useState('login');
+      useEffect(() => storage.set('portal:user', user), [user]);
+      useEffect(() => storage.set('portal:profile', profile), [profile]);
+      useEffect(() => storage.set('portal:curriculum', curriculum), [curriculum]);
+      useEffect(() => storage.set('portal:grades', grades), [grades]);
+      useEffect(() => storage.set('portal:history', history), [history]);
+      useEffect(() => storage.set('portal:studentMarks', allMarks), [allMarks]);
+      useEffect(() => storage.set('portal:verificationRequests', verificationRequests), [verificationRequests]);
+      useEffect(() => storage.set('portal:leaderboardStudents', leaderboardStudents), [leaderboardStudents]);
+      useEffect(() => storage.set('portal:paperRequests', paperRequests), [paperRequests]);
+      useEffect(() => storage.set('portal:questionPapers', questionPapers), [questionPapers]);
+      useEffect(() => storage.set('portal:target', targetCgpa), [targetCgpa]);
+      useEffect(() => storage.set('portal:chat', chat), [chat]);
+      useEffect(() => {
+        const sem7 = curriculum['Computer Engineering']?.[7] || [];
+        const isOriginalDemo = sem7.length === 4 && sem7.some(s => s.id === 'sem7-cloud' && Number(s.credits) === 3) && !sem7.some(s => s.id === 'sem7-project');
+        if (isOriginalDemo) {
+          const next = structuredClone(curriculum);
+          next['Computer Engineering'][7] = initialCurriculum['Computer Engineering'][7];
+          setCurriculum(next);
+        }
+      }, []);
+
+      const go = nextRoute => navigate(nextRoute === 'landing' ? '/' : `/${nextRoute}`);
+      const currentSem = Number(profile?.semester || 7);
+      const currentBranch = profile?.branch || 'Computer Engineering';
+      const subjects = curriculum[currentBranch]?.[currentSem] || curriculum['Computer Engineering'][currentSem] || [];
+      const marks = getStudentMarks(allMarks, user, profile);
+      const calculationMarks = Object.fromEntries(subjects.map(subject => [subject.id, marks[marksKey(profile, subject.id)] || marks[subject.id] || {}]));
+      const currentSgpa = calculateSgpa(subjects, calculationMarks, grades);
+      const currentCredits = subjects.reduce((sum, s) => sum + Number(s.credits), 0);
+      const allSubjectsComplete = subjects.length > 0 && subjects.every(subject => {
+        const m = marks[marksKey(profile, subject.id)] || {};
+        return m.unit !== undefined && m.mid !== undefined && m.end !== undefined;
+      });
+      const previousCgpa = Number(profile?.actualCgpa || 0);
+      const previousCredits = Number(profile?.creditsEarned || 0);
+      const updatedCgpa = allSubjectsComplete ? calculateUpdatedCgpa(previousCgpa, previousCredits, currentSgpa, currentCredits) : previousCgpa;
+      const credits = allSubjectsComplete ? previousCredits + currentCredits : previousCredits;
+
+      useEffect(() => {
+        storage.set('portal:lastPrediction', {
+          studentKey: studentKey(user, profile),
+          targetCgpa,
+          currentSgpa,
+          updatedCgpa,
+          credits,
+          currentCredits,
+          allSubjectsComplete,
+          savedAt: new Date().toISOString()
+        });
+      }, [user, profile, targetCgpa, currentSgpa, updatedCgpa, credits, currentCredits, allSubjectsComplete]);
+
+      const performAuth = async (mode, payload) => {
+        const firebaseUser = await firebaseAuthAction(mode, payload);
+        if (mode === 'register') sendWelcomeVerificationEmail(payload);
+        const loggedIn = {
+          uid: firebaseUser?.uid || payload.email || `local-${Date.now()}`,
+          email: firebaseUser?.email || payload.email || 'student.google@adypu.edu.in',
+          name: firebaseUser?.displayName || payload.name || 'ADYPU Student',
+          provider: mode === 'google' ? 'Google' : 'Email'
+        };
+        setUser(loggedIn);
+        go(profile ? 'dashboard' : 'profile');
+      };
+
+      const updateStudentMarks = nextMarks => {
+        const key = studentKey(user, profile);
+        setAllMarks({ ...allMarks, [key]: nextMarks });
+      };
+
+      return React.createElement('div', { className: 'min-h-screen mesh' },
+        React.createElement(Header, { user, profile, route, go, logout: () => { setUser(null); go('landing'); } }),
+        React.createElement(Routes, null,
+          React.createElement(Route, { path: '/', element: React.createElement(Landing, { go }) }),
+          React.createElement(Route, { path: '/auth', element: React.createElement(Auth, { authMode, setAuthMode, performAuth, go }) }),
+          React.createElement(Route, { path: '/profile', element: React.createElement(ProfileSetup, { user, profile, setProfile, go }) }),
+          React.createElement(Route, { path: '/dashboard', element: React.createElement(Dashboard, { user, profile, setProfile, history, setHistory, subjects, marks, setMarks: updateStudentMarks, grades, currentSgpa, updatedCgpa, credits, currentCredits, allSubjectsComplete, targetCgpa, setTargetCgpa, chat, setChat, go, verificationRequests, setVerificationRequests, leaderboardStudents, curriculum, paperRequests, setPaperRequests, questionPapers }) }),
+          React.createElement(Route, { path: '/admin', element: React.createElement(AdminPanel, { user, profile, setProfile, curriculum, setCurriculum, grades, setGrades, verificationRequests, setVerificationRequests, leaderboardStudents, setLeaderboardStudents, paperRequests, setPaperRequests, questionPapers, setQuestionPapers }) })
+        )
+      );
+    }
+
+    function Header({ user, profile, route, go, logout }) {
+      return React.createElement('header', { className: 'sticky top-0 z-40 border-b border-white/60 bg-[#F5F0E6]/85 backdrop-blur-xl' },
+        React.createElement('div', { className: 'mx-auto flex max-w-7xl items-center justify-between px-4 py-3 sm:px-6 lg:px-8' },
+          React.createElement('button', { onClick: () => go(user ? 'dashboard' : 'landing'), className: 'flex items-center gap-3 text-left' },
+            React.createElement('span', { className: 'grid h-10 w-10 place-items-center rounded-lg bg-cyanbrand text-lg font-black text-white shadow-soft' }, 'A'),
+            React.createElement('span', null,
+              React.createElement('span', { className: 'block text-sm font-extrabold tracking-wide text-ink sm:text-base' }, 'ADYPU CGPA & SGPA'),
+              React.createElement('span', { className: 'hidden text-xs text-slateblue sm:block' }, 'Predictor Portal')
+            )
+          ),
+          React.createElement('nav', { className: 'flex items-center gap-2' },
+            user && React.createElement('button', { onClick: () => go('dashboard'), className: buttonClass(route === 'dashboard') }, 'Dashboard'),
+            user && React.createElement('button', { onClick: () => go('admin'), className: buttonClass(route === 'admin') }, 'Admin'),
+            !user && React.createElement('button', { onClick: () => go('auth'), className: 'rounded-lg px-4 py-2 text-sm font-bold text-ink hover:bg-white/70' }, 'Login'),
+            user && React.createElement('button', { onClick: logout, className: 'rounded-lg border border-cyanbrand/30 px-4 py-2 text-sm font-bold text-slateblue hover:bg-white/80' }, 'Logout')
+          )
+        )
+      );
+    }
+
+    function buttonClass(active) {
+      return `rounded-lg px-4 py-2 text-sm font-bold transition ${active ? 'bg-cyanbrand text-white shadow-soft' : 'text-ink hover:bg-white/70'}`;
+    }
+
+    function Landing({ go }) {
+      return React.createElement('main', { className: 'fade-in' },
+        React.createElement('section', { className: 'mx-auto grid min-h-[76vh] max-w-7xl items-center gap-10 px-4 py-14 sm:px-6 lg:grid-cols-[1.05fr_.95fr] lg:px-8' },
+          React.createElement('div', null,
+            React.createElement('p', { className: 'mb-4 inline-flex rounded-lg bg-white/70 px-4 py-2 text-sm font-bold text-slateblue shadow-sm' }, 'Ajeenkya DY Patil University'),
+            React.createElement('h1', { className: 'max-w-3xl text-4xl font-black leading-tight text-ink sm:text-6xl' }, 'Calculate, Predict & Improve Your CGPA'),
+            React.createElement('p', { className: 'mt-5 max-w-2xl text-lg leading-8 text-slateblue' }, 'Track your academic performance, predict future CGPA, and plan your semester goals effectively.'),
+            React.createElement('div', { className: 'mt-8 flex flex-wrap gap-3' },
+              React.createElement('button', { onClick: () => go('auth'), className: 'rounded-lg bg-cyanbrand px-6 py-3 font-extrabold text-white shadow-soft transition hover:-translate-y-0.5' }, 'Login'),
+              React.createElement('button', { onClick: () => go('auth'), className: 'rounded-lg bg-white px-6 py-3 font-extrabold text-ink shadow-academic transition hover:-translate-y-0.5' }, 'Register'),
+              React.createElement('button', { onClick: () => go('auth'), className: 'rounded-lg border border-cyanbrand/40 bg-skysoft/35 px-6 py-3 font-extrabold text-ink transition hover:bg-skysoft/55' }, 'Calculate Now')
+            )
+          ),
+          React.createElement('div', { className: 'glass rounded-xl p-5 shadow-academic' },
+            React.createElement('div', { className: 'grid gap-4' },
+              ['Live SGPA', 'Target CGPA', 'Credits', 'Predicted Grade'].map((label, index) =>
+                React.createElement('div', { key: label, className: 'rounded-lg bg-white/78 p-5 shadow-sm' },
+                  React.createElement('div', { className: 'flex items-center justify-between' },
+                    React.createElement('span', { className: 'text-sm font-bold text-slateblue' }, label),
+                    React.createElement('span', { className: 'rounded-md bg-cyanbrand/10 px-3 py-1 text-sm font-black text-cyanbrand' }, ['8.72', '9.00', '142', 'A'][index])
+                  ),
+                  React.createElement('div', { className: 'mt-4 h-2 overflow-hidden rounded-full bg-parchment' },
+                    React.createElement('div', { className: 'h-full rounded-full bg-cyanbrand', style: { width: `${[82, 90, 70, 76][index]}%` } })
+                  )
+                )
+              )
+            )
+          )
+        ),
+        React.createElement('section', { className: 'bg-white/55 py-14' },
+          React.createElement('div', { className: 'mx-auto max-w-7xl px-4 sm:px-6 lg:px-8' },
+            React.createElement('h2', { className: 'text-3xl font-black text-ink' }, 'About the Portal'),
+            React.createElement('p', { className: 'mt-4 max-w-4xl text-base leading-8 text-slateblue' }, 'This portal helps ADYPU students calculate SGPA and CGPA, predict future academic performance, estimate required marks, and receive AI-powered study guidance for maintaining or improving their grades.')
+          )
+        ),
+        React.createElement('section', { className: 'mx-auto max-w-7xl px-4 py-14 sm:px-6 lg:px-8' },
+          React.createElement('h2', { className: 'text-3xl font-black text-ink' }, 'Features'),
+          React.createElement('div', { className: 'mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4' },
+            features.map((feature, i) => React.createElement('div', { key: feature, className: 'rounded-lg bg-white/80 p-5 shadow-academic transition hover:-translate-y-1 hover:shadow-soft' },
+              React.createElement('div', { className: 'mb-4 grid h-11 w-11 place-items-center rounded-lg bg-skysoft/45 text-lg font-black text-ink' }, String(i + 1).padStart(2, '0')),
+              React.createElement('h3', { className: 'font-extrabold text-ink' }, feature)
+            ))
+          )
+        )
+      );
+    }
+
+    function Auth({ authMode, setAuthMode, performAuth }) {
+      const [name, setName] = useState('ADYPU Student');
+      const [email, setEmail] = useState('student@adypu.edu.in');
+      const [password, setPassword] = useState('Adypu@123');
+      const [confirmPassword, setConfirmPassword] = useState('Adypu@123');
+      const [error, setError] = useState('');
+      const [success, setSuccess] = useState('');
+      const submit = async e => {
+        e.preventDefault();
+        setError('');
+        setSuccess('');
+        const passwordError = strongPasswordMessage(password);
+        if (authMode === 'register' && !name.trim()) return setError('Full Name is required.');
+        if (!email.includes('@')) return setError('Enter a valid email address.');
+        if (passwordError) return setError(passwordError);
+        if (authMode === 'register' && password !== confirmPassword) return setError('Password and Confirm Password must match.');
+        try {
+          await performAuth(authMode === 'register' ? 'register' : 'login', { name, email, password });
+          setSuccess(authMode === 'register' ? 'Registration successful. A welcome verification email has been prepared from ADYPU CGPA Portal.' : 'Login successful.');
+        } catch (err) {
+          setError(err?.message || 'Authentication failed. Check your credentials and try again.');
+        }
+      };
+      const googleLogin = async () => {
+        setError('');
+        try {
+          await performAuth('google', { name: 'Google Student', email: 'student.google@adypu.edu.in' });
+        } catch (err) {
+          setError(err?.message || 'Google login failed.');
+        }
+      };
+      return React.createElement('main', { className: 'mx-auto grid min-h-[78vh] max-w-5xl place-items-center px-4 py-12' },
+        React.createElement('div', { className: 'grid w-full overflow-hidden rounded-xl bg-white shadow-academic md:grid-cols-[.9fr_1.1fr]' },
+          React.createElement('div', { className: 'bg-cyanbrand p-8 text-white' },
+            React.createElement('h1', { className: 'text-3xl font-black' }, authMode === 'register' ? 'Create your student account' : 'Welcome back'),
+            React.createElement('p', { className: 'mt-4 leading-7 text-white/90' }, 'Secure authentication is wired for Firebase Authentication. Add your Firebase project keys to use real email/password and Google sign-in.'),
+            React.createElement('div', { className: 'mt-8 rounded-lg bg-white/15 p-4 text-sm' }, 'Auth: Email Password, Google Provider. Data: Firestore-ready Users, Marks, VerificationRequests, Leaderboard.')
+          ),
+          React.createElement('form', { className: 'p-8', onSubmit: submit },
+            React.createElement('div', { className: 'mb-6 flex rounded-lg bg-parchment p-1' },
+              ['login', 'register'].map(mode => React.createElement('button', { type: 'button', key: mode, onClick: () => setAuthMode(mode), className: `flex-1 rounded-md py-2 text-sm font-extrabold ${authMode === mode ? 'bg-white text-ink shadow-sm' : 'text-slateblue'}` }, mode === 'login' ? 'Email Login' : 'Registration'))
+            ),
+            authMode === 'register' && React.createElement(Field, { label: 'Full Name', value: name, onChange: setName }),
+            React.createElement(Field, { label: 'Email Address', value: email, onChange: setEmail, type: 'email' }),
+            React.createElement(Field, { label: 'Password', value: password, onChange: setPassword, type: 'password' }),
+            authMode === 'register' && React.createElement(Field, { label: 'Confirm Password', value: confirmPassword, onChange: setConfirmPassword, type: 'password' }),
+            React.createElement('div', { className: 'mt-3 rounded-lg bg-parchment p-3 text-xs font-semibold text-slateblue' }, 'Strong password: 8+ characters, uppercase, lowercase, number, and special character.'),
+            error && React.createElement('p', { className: 'mt-3 rounded-lg bg-red-50 p-3 text-sm font-bold text-red-700' }, error),
+            success && React.createElement('p', { className: 'mt-3 rounded-lg bg-emerald-50 p-3 text-sm font-bold text-emerald-700' }, success),
+            React.createElement('button', { className: 'mt-5 w-full rounded-lg bg-cyanbrand px-5 py-3 font-extrabold text-white shadow-soft' }, authMode === 'register' ? 'Register' : 'Login using Email and Password'),
+            React.createElement('button', { type: 'button', onClick: googleLogin, className: 'mt-3 w-full rounded-lg border border-skysoft bg-white px-5 py-3 font-extrabold text-ink' }, 'Continue with Google')
+          )
+        )
+      );
+    }
+
+    function ProfileSetup({ user, profile, setProfile, go }) {
+      const initialYear = profile?.year || 'Fourth Year';
+      const [draft, setDraft] = useState(profile || { name: user?.name || 'ADYPU Student', prn: 'PRN2026001', branch: 'Computer Engineering', year: initialYear, semester: semestersByYear[initialYear][0], actualCgpa: '', creditsEarned: '' });
+      const [error, setError] = useState('');
+      const validSemesters = semestersByYear[draft.year] || [];
+      const previousLabel = previousSemesterText(draft.semester);
+      const setYear = value => setDraft({ ...draft, year: value, semester: semestersByYear[value][0] });
+      const save = e => {
+        e.preventDefault();
+        setError('');
+        if (!draft.name.trim() || !draft.prn.trim()) return setError('Full Name and PRN / URN Number are required.');
+        if (!draft.actualCgpa || Number(draft.actualCgpa) < 0 || Number(draft.actualCgpa) > 10) return setError('Enter your ACTUAL CGPA between 0 and 10.');
+        if (!draft.creditsEarned || Number(draft.creditsEarned) <= 0) return setError('Enter your ACTUAL total earned credits.');
+        setProfile(draft);
+        go('dashboard');
+      };
+      return React.createElement('main', { className: 'mx-auto max-w-3xl px-4 py-12' },
+        React.createElement('form', { onSubmit: save, className: 'rounded-xl bg-white p-8 shadow-academic' },
+          React.createElement('h1', { className: 'text-3xl font-black text-ink' }, 'Student Profile Setup'),
+          React.createElement('p', { className: 'mt-2 text-slateblue' }, 'Complete this once after first login. Your academic dashboard will adapt to the selected branch, year, and semester.'),
+          draft.verified && React.createElement('p', { className: 'mt-4 inline-flex rounded-lg bg-emerald-50 px-3 py-2 text-sm font-black text-emerald-700' }, 'Verified Student Badge'),
+          React.createElement(Field, { label: 'Full Name', value: draft.name, onChange: value => setDraft({ ...draft, name: value }) }),
+          React.createElement(Field, { label: 'PRN / URN Number', value: draft.prn, onChange: value => setDraft({ ...draft, prn: value }) }),
+          React.createElement(SelectField, { label: 'Branch', value: draft.branch, onChange: value => setDraft({ ...draft, branch: value }), options: branches }),
+          React.createElement(SelectField, { label: 'Current Academic Year', value: draft.year, onChange: setYear, options: years }),
+          React.createElement(SelectField, { label: 'Dynamic Semester Selection', value: draft.semester, onChange: value => setDraft({ ...draft, semester: value }), options: validSemesters }),
+          React.createElement(Field, { label: `Enter your ACTUAL CGPA up to the PREVIOUS completed semester (${previousLabel}).`, value: draft.actualCgpa, onChange: value => setDraft({ ...draft, actualCgpa: value }), type: 'number' }),
+          React.createElement('p', { className: 'mt-2 rounded-lg bg-amber-50 p-3 text-sm font-bold text-amber-800' }, 'For accurate predictions, enter your actual CGPA. Do not enter estimated or fake values.'),
+          React.createElement(Field, { label: `Enter your ACTUAL Total Credits Earned up to ${previousLabel}.`, value: draft.creditsEarned, onChange: value => setDraft({ ...draft, creditsEarned: value }), type: 'number' }),
+          React.createElement('p', { className: 'mt-2 rounded-lg bg-amber-50 p-3 text-sm font-bold text-amber-800' }, 'For accurate calculations and CGPA predictions, enter your actual earned credits.'),
+          error && React.createElement('p', { className: 'mt-4 rounded-lg bg-red-50 p-3 text-sm font-bold text-red-700' }, error),
+          React.createElement('button', { className: 'mt-6 rounded-lg bg-cyanbrand px-6 py-3 font-extrabold text-white shadow-soft' }, 'Save Profile')
+        )
+      );
+    }
+
+    function Dashboard(props) {
+      const { user, profile, setProfile, history, setHistory, subjects, marks, setMarks, grades, currentSgpa, updatedCgpa, credits, currentCredits, allSubjectsComplete, targetCgpa, setTargetCgpa, chat, setChat, go, verificationRequests, setVerificationRequests, leaderboardStudents, curriculum, paperRequests, setPaperRequests, questionPapers } = props;
+      const [activeTab, setActiveTab] = useState('marks');
+      const predictionHistory = [{ sem: Number(profile?.semester || 7) - 1, sgpa: Number(profile?.actualCgpa || 0), credits: Number(profile?.creditsEarned || 0) }];
+      const predictor = useMemo(() => buildPrediction({ subjects, history: predictionHistory, currentSem: Number(profile?.semester || 7), targetCgpa: Number(targetCgpa), grades }), [subjects, profile, targetCgpa, grades]);
+      const completedSubjects = subjects.filter(subject => {
+        const m = marks[marksKey(profile, subject.id)] || marks[subject.id] || {};
+        return m.unit !== undefined && m.mid !== undefined && m.end !== undefined;
+      }).length;
+      return React.createElement('main', { className: 'mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8' },
+        React.createElement('div', { className: 'mb-6 flex flex-col justify-between gap-4 md:flex-row md:items-end' },
+          React.createElement('div', null,
+            React.createElement('h1', { className: 'text-3xl font-black text-ink' }, `Welcome, ${profile?.name || 'Student Name'}`),
+            React.createElement('p', { className: 'mt-2 text-slateblue' }, `${profile?.branch || 'Computer Engineering'} - ${profile?.year || 'Fourth Year'} - Semester ${profile?.semester || 7}`),
+            profile?.verified && React.createElement('p', { className: 'mt-3 inline-flex rounded-lg bg-emerald-50 px-3 py-2 text-sm font-black text-emerald-700' }, 'Verified Student')
+          ),
+          React.createElement('button', { onClick: () => go('profile'), className: 'rounded-lg bg-white px-4 py-3 text-sm font-extrabold text-ink shadow-sm' }, 'Edit Profile')
+        ),
+        React.createElement('section', { className: 'grid gap-4 sm:grid-cols-2 lg:grid-cols-4' },
+          React.createElement(MetricCard, { label: 'Current CGPA', value: profile?.actualCgpa || '0', tone: 'cyan' }),
+          React.createElement(MetricCard, { label: 'Current Semester SGPA', value: allSubjectsComplete ? currentSgpa.toFixed(2) : '--', tone: 'blue' }),
+          React.createElement(MetricCard, { label: 'Updated CGPA', value: allSubjectsComplete ? updatedCgpa.toFixed(2) : '--', tone: 'cyan' }),
+          React.createElement(MetricCard, { label: 'Updated Credits Earned', value: allSubjectsComplete ? credits : (profile?.creditsEarned || '0'), tone: 'blue' })
+        ),
+        React.createElement('nav', { className: 'mt-6 flex gap-2 overflow-x-auto rounded-xl bg-white/75 p-2 shadow-academic scrollbar-thin' },
+          [
+            ['marks', 'Marks Entry'],
+            ['predict', 'Future Predictor'],
+            ['assistant', 'AI Assistant'],
+            ['leaderboard', 'Leaderboard'],
+            ['verification', 'Verification'],
+            ['papers', 'Previous Year Papers'],
+            ['report', 'Report']
+          ].map(([key, label]) =>
+            React.createElement('button', { key, onClick: () => setActiveTab(key), className: `shrink-0 rounded-lg px-4 py-2 text-sm font-extrabold transition ${activeTab === key ? 'bg-cyanbrand text-white shadow-soft' : 'text-slateblue hover:bg-white'}` }, label)
+          )
+        ),
+        React.createElement('section', { className: 'mt-6' },
+          activeTab === 'marks' && React.createElement(MarksEntry, { profile, subjects, marks, setMarks, grades, currentSgpa, updatedCgpa, allSubjectsComplete, currentCredits }),
+          activeTab === 'predict' && React.createElement(Predictor, { targetCgpa, setTargetCgpa, predictor }),
+          activeTab === 'assistant' && React.createElement(AIAssistant, { chat, setChat, profile, subjects, currentSgpa, cgpa: updatedCgpa }),
+          activeTab === 'leaderboard' && React.createElement(Leaderboard, { profile, leaderboardStudents }),
+          activeTab === 'verification' && React.createElement(VerificationCenter, { user, profile, setProfile, verificationRequests, setVerificationRequests }),
+          activeTab === 'papers' && React.createElement(PreviousYearPapers, { user, profile, curriculum, paperRequests, setPaperRequests, questionPapers }),
+          activeTab === 'report' && React.createElement(Report, { profile, history, subjects, marks, grades, currentSgpa, cgpa: updatedCgpa, predictor })
+        )
+      );
+    }
+
+    function MarksEntry({ profile, subjects, marks, setMarks, grades, currentSgpa, updatedCgpa, allSubjectsComplete, currentCredits }) {
+      const [savedAt, setSavedAt] = useState('All changes saved.');
+      const update = (id, key, value) => {
+        const storageKey = marksKey(profile, id);
+        const next = { ...marks, [storageKey]: { ...(marks[storageKey] || {}), subjectId: id, semester: profile?.semester, branch: profile?.branch, [key]: clamp(Number(value), 0, key === 'unit' ? 20 : 50), savedAt: new Date().toISOString() } };
+        setMarks(next);
+        setSavedAt('All changes saved.');
+      };
+      const completedSubjects = subjects.filter(subject => {
+        const m = marks[marksKey(profile, subject.id)] || {};
+        return m.unit !== undefined && m.mid !== undefined && m.end !== undefined;
+      }).length;
+      const completion = subjects.length ? Math.round((completedSubjects / subjects.length) * 100) : 0;
+      return React.createElement('div', { className: 'rounded-xl bg-white p-6 shadow-academic' },
+        React.createElement('div', { className: 'flex flex-col justify-between gap-3 md:flex-row md:items-center' },
+          React.createElement('div', null,
+            React.createElement('h2', { className: 'text-2xl font-black text-ink' }, 'Detailed Marks Entry System'),
+            React.createElement('p', { className: 'text-slateblue' }, 'Marks auto-save per student, semester, and subject. Semester credits are calculated automatically from the subject database.'),
+            React.createElement('p', { className: 'mt-2 inline-flex rounded-lg bg-skysoft/25 px-3 py-2 text-sm font-black text-ink' }, `Semester Credits: ${currentCredits}`)
+          ),
+          React.createElement('div', { className: 'grid gap-3 sm:grid-cols-2' },
+            React.createElement('div', { className: 'rounded-lg bg-parchment px-5 py-3 text-right' },
+              React.createElement('p', { className: 'text-xs font-bold text-slateblue' }, 'Current Semester SGPA'),
+              React.createElement('p', { className: 'text-2xl font-black text-cyanbrand' }, allSubjectsComplete ? currentSgpa.toFixed(2) : '--')
+            ),
+            React.createElement('div', { className: 'rounded-lg bg-parchment px-5 py-3 text-right' },
+              React.createElement('p', { className: 'text-xs font-bold text-slateblue' }, 'Updated CGPA'),
+              React.createElement('p', { className: 'text-2xl font-black text-cyanbrand' }, allSubjectsComplete ? updatedCgpa.toFixed(2) : '--')
+            )
+          )
+        ),
+        React.createElement('div', { className: 'mt-5 rounded-lg bg-emerald-50 p-4' },
+          React.createElement('div', { className: 'flex justify-between text-sm font-black text-emerald-700' },
+            React.createElement('span', null, savedAt),
+            React.createElement('span', null, `${completion}% complete`)
+          ),
+          React.createElement('div', { className: 'mt-3 h-2 overflow-hidden rounded-full bg-white' },
+            React.createElement('div', { className: 'h-full rounded-full bg-cyanbrand', style: { width: `${completion}%` } })
+          )
+        ),
+        React.createElement('div', { className: 'mt-6 overflow-x-auto scrollbar-thin' },
+          React.createElement('table', { className: 'w-full min-w-[860px] border-separate border-spacing-y-3' },
+            React.createElement('thead', { className: 'text-left text-sm text-slateblue' },
+              React.createElement('tr', null, ['Subject', 'Credits', 'Unit Test /20', 'Mid-Term /50', 'End-Term /50', 'Total /120', 'Grade', 'GP', 'Credit Points'].map(h => React.createElement('th', { key: h, className: 'px-3 py-2' }, h)))
+            ),
+            React.createElement('tbody', null, subjects.map(subject => {
+              const m = marks[marksKey(profile, subject.id)] || {};
+              const total = Number(m.unit || 0) + Number(m.mid || 0) + Number(m.end || 0);
+              const grade = gradeForMarks(total, grades);
+              return React.createElement('tr', { key: subject.id, className: 'bg-parchment/70' },
+                React.createElement('td', { className: 'rounded-l-lg px-3 py-3 font-extrabold' }, subject.name),
+                React.createElement('td', { className: 'px-3 py-3' }, subject.credits),
+                ['unit', 'mid', 'end'].map(key => React.createElement('td', { key, className: 'px-3 py-3' }, React.createElement('input', { type: 'number', value: m[key] ?? '', onChange: e => update(subject.id, key, e.target.value), className: 'w-24 rounded-md border border-creamline px-3 py-2 outline-none focus:ring-2 focus:ring-cyanbrand/30' }))),
+                React.createElement('td', { className: 'px-3 py-3 font-bold' }, total),
+                React.createElement('td', { className: 'px-3 py-3 font-black text-cyanbrand' }, grade.grade),
+                React.createElement('td', { className: 'px-3 py-3 font-bold' }, grade.gp),
+                React.createElement('td', { className: 'rounded-r-lg px-3 py-3 font-bold' }, grade.gp * subject.credits)
+              );
+            }))
+          )
+        )
+      );
+    }
+
+    function Leaderboard({ profile, leaderboardStudents }) {
+      const [filters, setFilters] = useState({
+        branch: profile?.branch || 'Computer Engineering',
+        year: profile?.year || 'Fourth Year',
+        semester: profile?.semester || '7'
+      });
+      const ranked = leaderboardStudents
+        .filter(student => !filters.branch || student.branch === filters.branch)
+        .filter(student => !filters.year || student.year === filters.year)
+        .filter(student => !filters.semester || String(student.semester) === String(filters.semester))
+        .filter(student => student.verified === true)
+        .sort((a, b) => Number(b.actualCgpa) - Number(a.actualCgpa))
+        .map((student, index) => ({ ...student, rank: index + 1 }));
+      return React.createElement('div', { className: 'rounded-xl bg-white p-6 shadow-academic' },
+        React.createElement('div', { className: 'flex flex-col justify-between gap-4 md:flex-row md:items-end' },
+          React.createElement('div', null,
+            React.createElement('h2', { className: 'text-2xl font-black text-ink' }, 'Verified Student Leaderboard'),
+            React.createElement('p', { className: 'mt-2 text-slateblue' }, 'Only admin verified students appear here. Unverified students can view rankings, but cannot receive a rank or appear on the leaderboard.')
+          ),
+          React.createElement('div', { className: 'rounded-lg bg-emerald-50 px-4 py-3 text-sm font-black text-emerald-700' }, `${ranked.length} admin verified students`)
+        ),
+        React.createElement('div', { className: 'mt-5 grid gap-4 md:grid-cols-3' },
+          React.createElement(SelectField, { label: 'Branch', value: filters.branch, onChange: value => setFilters({ ...filters, branch: value }), options: branches }),
+          React.createElement(SelectField, { label: 'Academic Year', value: filters.year, onChange: value => setFilters({ ...filters, year: value, semester: semestersByYear[value][0] }), options: years }),
+          React.createElement(SelectField, { label: 'Semester', value: filters.semester, onChange: value => setFilters({ ...filters, semester: value }), options: semestersByYear[filters.year] || [] })
+        ),
+        React.createElement('div', { className: 'mt-6 overflow-x-auto scrollbar-thin' },
+          React.createElement('table', { className: 'w-full min-w-[760px] border-separate border-spacing-y-3' },
+            React.createElement('thead', { className: 'text-left text-sm text-slateblue' },
+              React.createElement('tr', null, ['Rank', 'Student Name', 'Branch', 'Semester', 'CGPA', 'Status'].map(h => React.createElement('th', { key: h, className: 'px-3 py-2' }, h)))
+            ),
+            React.createElement('tbody', null,
+              ranked.map(student => React.createElement('tr', { key: student.id, className: 'bg-parchment/70' },
+                React.createElement('td', { className: 'rounded-l-lg px-3 py-4 text-xl font-black text-cyanbrand' }, `Rank ${student.rank}`),
+                React.createElement('td', { className: 'px-3 py-4 font-extrabold text-ink' }, student.name),
+                React.createElement('td', { className: 'px-3 py-4' }, student.branch),
+                React.createElement('td', { className: 'px-3 py-4' }, `Sem ${student.semester}`),
+                React.createElement('td', { className: 'px-3 py-4 text-lg font-black text-ink' }, Number(student.actualCgpa).toFixed(2)),
+                React.createElement('td', { className: 'rounded-r-lg px-3 py-4' }, React.createElement('span', { className: 'rounded-lg bg-emerald-50 px-3 py-2 text-sm font-black text-emerald-700' }, 'Admin Verified Student'))
+              )),
+              ranked.length === 0 && React.createElement('tr', null, React.createElement('td', { colSpan: 6, className: 'rounded-lg bg-parchment p-6 text-center font-bold text-slateblue' }, 'No verified students match these filters yet.'))
+            )
+          )
+        )
+      );
+    }
+
+    function PreviousYearPapers({ user, profile, curriculum, paperRequests, setPaperRequests, questionPapers }) {
+      const [filters, setFilters] = useState({ branch: profile?.branch || 'Computer Engineering', year: profile?.year || 'Fourth Year', semester: profile?.semester || '7' });
+      const [showUpload, setShowUpload] = useState(false);
+      const approved = questionPapers
+        .filter(paper => paper.status === 'Approved')
+        .filter(paper => paper.branch === filters.branch)
+        .filter(paper => paper.year === filters.year)
+        .filter(paper => String(paper.semester) === String(filters.semester))
+        .sort((a, b) => new Date(b.uploadDate) - new Date(a.uploadDate));
+      const selectedSubjects = curriculum[filters.branch]?.[filters.semester] || curriculum['Computer Engineering']?.[filters.semester] || [];
+      return React.createElement('div', { className: 'rounded-xl bg-white p-6 shadow-academic' },
+        React.createElement('div', { className: 'flex flex-col justify-between gap-4 md:flex-row md:items-end' },
+          React.createElement('div', null,
+            React.createElement('h2', { className: 'text-2xl font-black text-ink' }, 'Previous Year Question Papers'),
+            React.createElement('p', { className: 'mt-2 text-slateblue' }, 'Find admin-approved question papers by branch, year, and semester.')
+          ),
+          React.createElement('button', { onClick: () => setShowUpload(!showUpload), className: 'rounded-lg bg-cyanbrand px-5 py-3 font-extrabold text-white shadow-soft' }, showUpload ? 'Close Upload Form' : 'Upload Question Paper')
+        ),
+        React.createElement('div', { className: 'mt-5 grid gap-4 md:grid-cols-3' },
+          React.createElement(SelectField, { label: 'Academic Year', value: filters.year, onChange: value => setFilters({ ...filters, year: value, semester: semestersByYear[value][0] }), options: years }),
+          React.createElement(SelectField, { label: 'Semester', value: filters.semester, onChange: value => setFilters({ ...filters, semester: value }), options: semestersByYear[filters.year] || [] }),
+          React.createElement(SelectField, { label: 'Branch', value: filters.branch, onChange: value => setFilters({ ...filters, branch: value }), options: branches })
+        ),
+        showUpload && React.createElement(QuestionPaperUploadForm, { user, profile, curriculum, paperRequests, setPaperRequests }),
+        React.createElement('div', { className: 'mt-6 overflow-x-auto scrollbar-thin' },
+          React.createElement('table', { className: 'w-full min-w-[900px] border-separate border-spacing-y-3' },
+            React.createElement('thead', { className: 'text-left text-sm text-slateblue' },
+              React.createElement('tr', null, ['Subject Name', 'Exam Type', 'Academic Year', 'Semester', 'Uploaded By', 'Upload Date', 'Download'].map(h => React.createElement('th', { key: h, className: 'px-3 py-2' }, h)))
+            ),
+            React.createElement('tbody', null,
+              approved.map(paper => React.createElement('tr', { key: paper.id, className: 'bg-parchment/70' },
+                React.createElement('td', { className: 'rounded-l-lg px-3 py-4 font-extrabold' }, paper.subject),
+                React.createElement('td', { className: 'px-3 py-4' }, paper.examType),
+                React.createElement('td', { className: 'px-3 py-4' }, paper.year),
+                React.createElement('td', { className: 'px-3 py-4' }, `Sem ${paper.semester}`),
+                React.createElement('td', { className: 'px-3 py-4' }, paper.uploadedBy),
+                React.createElement('td', { className: 'px-3 py-4' }, new Date(paper.uploadDate).toLocaleDateString()),
+                React.createElement('td', { className: 'rounded-r-lg px-3 py-4' }, React.createElement('a', { href: paper.file?.dataUrl || '#', download: paper.file?.name || 'question-paper.pdf', className: 'rounded-md bg-white px-3 py-2 text-xs font-black text-cyanbrand shadow-sm' }, 'Download'))
+              )),
+              approved.length === 0 && React.createElement('tr', null, React.createElement('td', { colSpan: 7, className: 'rounded-lg bg-parchment p-6 text-center font-bold text-slateblue' }, 'No approved papers found for these filters yet.'))
+            )
+          )
+        )
+      );
+    }
+
+    function QuestionPaperUploadForm({ user, profile, curriculum, paperRequests, setPaperRequests }) {
+      const initialYear = profile?.year || 'Fourth Year';
+      const [draft, setDraft] = useState({ branch: profile?.branch || 'Computer Engineering', year: initialYear, semester: profile?.semester || semestersByYear[initialYear][0], subject: '', examType: 'Unit Test' });
+      const [file, setFile] = useState(null);
+      const [status, setStatus] = useState('');
+      const [message, setMessage] = useState('');
+      const subjects = curriculum[draft.branch]?.[draft.semester] || curriculum['Computer Engineering']?.[draft.semester] || [];
+      useEffect(() => {
+        if (!draft.subject && subjects[0]?.name) setDraft(current => ({ ...current, subject: subjects[0].name }));
+      }, [draft.branch, draft.semester]);
+      const choosePdf = selected => {
+        if (!selected) return;
+        if (selected.type !== 'application/pdf') {
+          setStatus('Only PDF question papers are allowed.');
+          return;
+        }
+        const reader = new FileReader();
+        reader.onload = () => {
+          setFile({ name: selected.name, type: selected.type, size: selected.size, dataUrl: reader.result, uploadedAt: new Date().toISOString() });
+          setStatus('PDF ready for admin review.');
+        };
+        reader.readAsDataURL(selected);
+      };
+      const submit = e => {
+        e.preventDefault();
+        setMessage('');
+        if (!file) return setMessage('Upload a PDF question paper before submitting.');
+        setPaperRequests([...paperRequests, {
+          id: `paper-${Date.now()}`,
+          studentKey: studentKey(user, profile),
+          uploadedBy: profile?.name || user?.name || 'ADYPU Student',
+          branch: draft.branch,
+          year: draft.year,
+          semester: draft.semester,
+          subject: draft.subject,
+          examType: draft.examType,
+          file,
+          status: 'Pending',
+          uploadDate: new Date().toISOString()
+        }]);
+        setMessage('Question paper submitted to Admin Dashboard for approval.');
+        setFile(null);
+      };
+      return React.createElement('form', { onSubmit: submit, className: 'mt-6 rounded-xl bg-parchment/80 p-5' },
+        React.createElement('h3', { className: 'text-xl font-black text-ink' }, 'Upload Question Paper'),
+        React.createElement(Field, { label: 'Student Name', value: profile?.name || user?.name || 'ADYPU Student', onChange: () => {} }),
+        React.createElement('div', { className: 'grid gap-4 md:grid-cols-2' },
+          React.createElement(SelectField, { label: 'Branch', value: draft.branch, onChange: value => setDraft({ ...draft, branch: value }), options: branches }),
+          React.createElement(SelectField, { label: 'Academic Year', value: draft.year, onChange: value => setDraft({ ...draft, year: value, semester: semestersByYear[value][0] }), options: years }),
+          React.createElement(SelectField, { label: 'Semester', value: draft.semester, onChange: value => setDraft({ ...draft, semester: value }), options: semestersByYear[draft.year] || [] }),
+          React.createElement(SelectField, { label: 'Subject', value: draft.subject || subjects[0]?.name || '', onChange: value => setDraft({ ...draft, subject: value }), options: subjects.map(subject => subject.name) }),
+          React.createElement(SelectField, { label: 'Exam Type', value: draft.examType, onChange: value => setDraft({ ...draft, examType: value }), options: ['Unit Test', 'Mid-Term', 'End Semester'] }),
+          React.createElement('label', { className: 'mt-4 block' },
+            React.createElement('span', { className: 'text-sm font-bold text-slateblue' }, 'Upload PDF'),
+            React.createElement('input', { type: 'file', accept: 'application/pdf,.pdf', onChange: e => choosePdf(e.target.files[0]), className: 'mt-2 w-full rounded-lg border border-creamline bg-white px-4 py-3 text-ink' })
+          )
+        ),
+        status && React.createElement('p', { className: 'mt-3 rounded-lg bg-skysoft/25 p-3 text-sm font-black text-ink' }, status),
+        file && React.createElement('p', { className: 'mt-3 rounded-lg bg-white p-3 text-sm font-bold text-slateblue' }, `${file.name} - ${Math.round(file.size / 1024)} KB`),
+        message && React.createElement('p', { className: 'mt-3 rounded-lg bg-emerald-50 p-3 text-sm font-black text-emerald-700' }, message),
+        React.createElement('button', { className: 'mt-4 rounded-lg bg-cyanbrand px-5 py-3 font-extrabold text-white shadow-soft' }, 'Submit for Admin Approval')
+      );
+    }
+
+    function FileUploadBox({ file, setFile, status, setStatus }) {
+      const [dragging, setDragging] = useState(false);
+      const inputRef = useRef(null);
+      const accept = ['application/pdf', 'image/jpeg', 'image/jpg', 'image/png'];
+      const handleFile = selected => {
+        if (!selected) return;
+        if (!accept.includes(selected.type)) {
+          setStatus('Unsupported file format. Upload PDF, JPG, JPEG, or PNG only.');
+          return;
+        }
+        const reader = new FileReader();
+        reader.onload = () => {
+          setFile({ name: selected.name, type: selected.type, size: selected.size, dataUrl: reader.result, uploadedAt: new Date().toISOString() });
+          setStatus('Upload ready. File preview generated.');
+        };
+        reader.readAsDataURL(selected);
+      };
+      const onDrop = e => {
+        e.preventDefault();
+        setDragging(false);
+        handleFile(e.dataTransfer.files[0]);
+      };
+      return React.createElement('div', null,
+        React.createElement('div', {
+          onDragOver: e => { e.preventDefault(); setDragging(true); },
+          onDragLeave: () => setDragging(false),
+          onDrop,
+          className: `mt-4 rounded-xl border-2 border-dashed p-6 text-center transition ${dragging ? 'border-cyanbrand bg-skysoft/25' : 'border-skysoft bg-parchment/70'}`
+        },
+          React.createElement('h3', { className: 'text-lg font-black text-ink' }, 'Upload Official University Marksheet for Verification'),
+          React.createElement('p', { className: 'mt-2 text-sm font-semibold text-slateblue' }, 'Upload semester marksheet or consolidated marksheet. Supported formats: PDF, JPG, JPEG, PNG.'),
+          React.createElement('input', { ref: inputRef, type: 'file', accept: '.pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png', onChange: e => handleFile(e.target.files[0]), className: 'hidden' }),
+          React.createElement('button', { type: 'button', onClick: () => inputRef.current?.click(), className: 'mt-4 rounded-lg bg-cyanbrand px-5 py-3 font-extrabold text-white shadow-soft' }, 'Select File')
+        ),
+        status && React.createElement('p', { className: 'mt-3 rounded-lg bg-skysoft/25 p-3 text-sm font-black text-ink' }, status),
+        file && React.createElement('div', { className: 'mt-4 rounded-lg bg-white p-4 shadow-sm' },
+          React.createElement('div', { className: 'flex flex-col justify-between gap-3 md:flex-row md:items-center' },
+            React.createElement('div', null,
+              React.createElement('p', { className: 'font-black text-ink' }, file.name),
+              React.createElement('p', { className: 'text-sm font-semibold text-slateblue' }, `${file.type} - ${Math.round(file.size / 1024)} KB`)
+            ),
+            React.createElement('span', { className: 'rounded-lg bg-emerald-50 px-3 py-2 text-sm font-black text-emerald-700' }, 'File Preview')
+          ),
+          file.type?.startsWith('image/') && React.createElement('img', { src: file.dataUrl, alt: 'Uploaded marksheet preview', className: 'mt-4 max-h-64 w-full rounded-lg object-contain bg-parchment' }),
+          file.type === 'application/pdf' && React.createElement('div', { className: 'mt-4 rounded-lg bg-parchment p-5 text-sm font-bold text-slateblue' }, 'PDF preview ready. Admin can open the stored file in production Firebase Storage.')
+        )
+      );
+    }
+
+    function VerificationCenter({ user, profile, setProfile, verificationRequests, setVerificationRequests }) {
+      const existing = verificationRequests.find(req => req.studentKey === studentKey(user, profile) && req.status !== 'Rejected' && req.status !== 'Re-upload Requested');
+      const [marksheetFile, setMarksheetFile] = useState(null);
+      const [uploadStatus, setUploadStatus] = useState('');
+      const [message, setMessage] = useState('');
+      const submitRequest = e => {
+        e.preventDefault();
+        setMessage('');
+        if (existing) return setMessage('A verification request already exists. Duplicate requests are prevented.');
+        if (!marksheetFile) return setMessage('Upload your official university marksheet first.');
+        const request = {
+          id: `verify-${Date.now()}`,
+          studentKey: studentKey(user, profile),
+          name: profile?.name,
+          prn: profile?.prn,
+          branch: profile?.branch,
+          year: profile?.year,
+          semester: profile?.semester,
+          submittedCgpa: Number(profile?.actualCgpa || 0),
+          credits: Number(profile?.creditsEarned || 0),
+          file: marksheetFile,
+          status: 'Pending',
+          submittedAt: new Date().toISOString()
+        };
+        setVerificationRequests([...verificationRequests, request]);
+        setMessage('Verification request submitted for admin review.');
+      };
+      return React.createElement('div', { className: 'rounded-xl bg-white p-6 shadow-academic' },
+        React.createElement('h2', { className: 'text-2xl font-black text-ink' }, 'Verification System'),
+        React.createElement('p', { className: 'mt-2 max-w-3xl text-slateblue' }, 'Upload official documents for admin review. Students cannot manually assign verified status or edit leaderboard rankings. Only admin-approved students receive the badge and leaderboard eligibility.'),
+        React.createElement('div', { className: 'mt-5 grid gap-4 md:grid-cols-3' },
+          React.createElement(MetricCard, { label: 'Verification Status', value: profile?.verified ? 'Verified' : existing?.status || 'Unverified', tone: 'cyan' }),
+          React.createElement(MetricCard, { label: 'Leaderboard Eligibility', value: profile?.verified ? 'Eligible' : 'Hidden', tone: 'blue' }),
+          React.createElement(MetricCard, { label: 'Submitted CGPA', value: Number(profile?.actualCgpa || 0).toFixed(2), tone: 'cyan' })
+        ),
+        React.createElement('form', { onSubmit: submitRequest, className: 'mt-6' },
+          React.createElement(FileUploadBox, { file: marksheetFile, setFile: setMarksheetFile, status: uploadStatus, setStatus: setUploadStatus }),
+          React.createElement('button', { className: 'mt-4 rounded-lg bg-cyanbrand px-5 py-3 font-extrabold text-white' }, 'Submit Verification Request')
+        ),
+        message && React.createElement('p', { className: 'mt-4 rounded-lg bg-skysoft/25 p-3 text-sm font-black text-ink' }, message),
+        React.createElement('div', { className: 'mt-5 rounded-lg bg-parchment p-4 text-sm font-semibold text-slateblue' }, 'Production storage note: uploaded documents should be stored in Firebase Storage with authenticated read rules for admins only, and request metadata should live in Firestore.')
+      );
+    }
+
+    function SubjectProgress({ completedSubjects, remainingSubjects, totalSubjects, completion }) {
+      return React.createElement('div', { className: 'rounded-xl bg-white p-6 shadow-academic' },
+        React.createElement('div', { className: 'flex flex-col justify-between gap-4 md:flex-row md:items-center' },
+          React.createElement('div', null,
+            React.createElement('h2', { className: 'text-2xl font-black text-ink' }, 'Subject Completion Progress'),
+            React.createElement('p', { className: 'mt-2 text-slateblue' }, `${completedSubjects} / ${totalSubjects} Subjects Completed`)
+          ),
+          React.createElement('div', { className: 'grid gap-3 text-right sm:grid-cols-2' },
+            React.createElement('div', { className: 'rounded-lg bg-parchment px-4 py-3' },
+              React.createElement('p', { className: 'text-xs font-bold text-slateblue' }, 'Subjects Remaining'),
+              React.createElement('p', { className: 'text-2xl font-black text-ink' }, remainingSubjects)
+            ),
+            React.createElement('div', { className: 'rounded-lg bg-cyanbrand/10 px-4 py-3' },
+              React.createElement('p', { className: 'text-xs font-bold text-slateblue' }, 'Completion'),
+              React.createElement('p', { className: 'text-2xl font-black text-cyanbrand' }, `${completion}%`)
+            )
+          )
+        ),
+        React.createElement('div', { className: 'mt-5 h-4 overflow-hidden rounded-full bg-parchment' },
+          React.createElement('div', { className: 'h-full rounded-full bg-cyanbrand transition-all', style: { width: `${completion}%` } })
+        ),
+        React.createElement('p', { className: 'mt-3 text-sm font-black text-emerald-700' }, 'All changes saved.')
+      );
+    }
+
+    function PreviousPerformance({ history, setHistory, cgpa }) {
+      const update = (index, key, value) => {
+        const next = [...history];
+        next[index] = { ...next[index], [key]: value };
+        setHistory(next);
+      };
+      return React.createElement('div', { className: 'rounded-xl bg-white p-6 shadow-academic' },
+        React.createElement('h2', { className: 'text-2xl font-black text-ink' }, 'Previous Academic Performance Entry'),
+        React.createElement('div', { className: 'mt-5 grid gap-4 md:grid-cols-2 lg:grid-cols-3' },
+          history.map((row, index) => React.createElement('div', { key: row.sem, className: 'rounded-lg bg-parchment p-4' },
+            React.createElement('h3', { className: 'font-black text-ink' }, `Sem ${row.sem}`),
+            React.createElement(Field, { label: 'SGPA', value: row.sgpa, onChange: value => update(index, 'sgpa', value), type: 'number' }),
+            React.createElement(Field, { label: 'Semester Credits', value: row.credits, onChange: value => update(index, 'credits', value), type: 'number' })
+          ))
+        ),
+        React.createElement('div', { className: 'mt-5 rounded-lg bg-cyanbrand/10 p-5' },
+          React.createElement('p', { className: 'font-bold text-slateblue' }, 'CGPA = sum(SGPA x Semester Credits) / sum(Semester Credits)'),
+          React.createElement('p', { className: 'mt-2 text-3xl font-black text-cyanbrand' }, cgpa.toFixed(2))
+        )
+      );
+    }
+
+    function buildPrediction({ subjects, history, currentSem, targetCgpa, grades }) {
+      const previous = history.filter(row => Number(row.sem) !== currentSem && Number(row.sgpa) > 0 && Number(row.credits) > 0);
+      const prevCredits = previous.reduce((sum, row) => sum + Number(row.credits), 0);
+      const prevPoints = previous.reduce((sum, row) => sum + Number(row.sgpa) * Number(row.credits), 0);
+      const currentCredits = subjects.reduce((sum, s) => sum + Number(s.credits), 0);
+      const requiredSgpa = currentCredits ? (targetCgpa * (prevCredits + currentCredits) - prevPoints) / currentCredits : 0;
+      const perSubjectGp = clamp(requiredSgpa, 0, 10);
+      const minimum = subjects.map((subject, index) => ({ ...subject, requiredMarks: clamp(minimumMarksForGp(Math.ceil(perSubjectGp - (index % 2 ? 0.15 : 0)), grades), 36, 120) }));
+      const avgMarks = minimum.reduce((sum, s) => sum + s.requiredMarks, 0) / Math.max(1, minimum.length);
+      return {
+        requiredSgpa,
+        minimum,
+        scenarios: [
+          { label: 'Best Case Scenario', sgpa: clamp(requiredSgpa + 0.7, 0, 10), progress: clamp((requiredSgpa + 0.7) * 10, 0, 100) },
+          { label: 'Average Scenario', sgpa: clamp(requiredSgpa, 0, 10), progress: clamp(requiredSgpa * 10, 0, 100) },
+          { label: 'Minimum Required Scenario', sgpa: clamp(requiredSgpa - 0.25, 0, 10), progress: clamp((requiredSgpa - 0.25) * 10, 0, 100) }
+        ],
+        recommendation: minimum.length ? `If you score 5 more marks in ${minimum[0].name} and 4 more marks in ${minimum[1]?.name || minimum[0].name}, your SGPA may increase by about 0.25 to 0.35 points.` : 'Add subjects to generate recommendations.',
+        avgMarks
+      };
+    }
+
+    function Predictor({ targetCgpa, setTargetCgpa, predictor }) {
+      return React.createElement('div', { className: 'grid gap-6 lg:grid-cols-[.9fr_1.1fr]' },
+        React.createElement('div', { className: 'rounded-xl bg-white p-6 shadow-academic' },
+          React.createElement('h2', { className: 'text-2xl font-black text-ink' }, 'Future CGPA Predictor'),
+          React.createElement(Field, { label: 'Target CGPA', value: targetCgpa, onChange: setTargetCgpa, type: 'number' }),
+          React.createElement('div', { className: 'mt-5 rounded-lg bg-parchment p-5' },
+            React.createElement('p', { className: 'text-sm font-bold text-slateblue' }, 'Required current semester SGPA'),
+            React.createElement('p', { className: 'text-4xl font-black text-cyanbrand' }, predictor.requiredSgpa.toFixed(2))
+          ),
+          React.createElement('p', { className: 'mt-5 rounded-lg bg-skysoft/25 p-4 font-semibold text-ink' }, predictor.recommendation)
+        ),
+        React.createElement('div', { className: 'rounded-xl bg-white p-6 shadow-academic' },
+          React.createElement('h3', { className: 'text-xl font-black text-ink' }, 'Minimum Required Marks'),
+          React.createElement('div', { className: 'mt-4 space-y-3' }, predictor.minimum.map(subject =>
+            React.createElement('div', { key: subject.id },
+              React.createElement('div', { className: 'mb-1 flex justify-between text-sm font-bold' },
+                React.createElement('span', null, subject.name),
+                React.createElement('span', { className: 'text-cyanbrand' }, subject.requiredMarks)
+              ),
+              React.createElement('div', { className: 'h-3 overflow-hidden rounded-full bg-parchment' },
+                React.createElement('div', { className: 'h-full rounded-full bg-cyanbrand', style: { width: `${subject.requiredMarks / 120 * 100}%` } })
+              )
+            )
+          )),
+          React.createElement('div', { className: 'mt-6 space-y-4' }, predictor.scenarios.map(scenario =>
+            React.createElement('div', { key: scenario.label },
+              React.createElement('div', { className: 'mb-1 flex justify-between text-sm font-bold text-slateblue' },
+                React.createElement('span', null, scenario.label),
+                React.createElement('span', null, scenario.sgpa.toFixed(2))
+              ),
+              React.createElement('div', { className: 'h-2 overflow-hidden rounded-full bg-parchment' },
+                React.createElement('div', { className: 'h-full rounded-full bg-skysoft', style: { width: `${scenario.progress}%` } })
+              )
+            )
+          ))
+        )
+      );
+    }
+
+    function Analytics({ profile, history, subjects, marks, grades, cgpa, currentSgpa }) {
+      const trendRef = useRef(null);
+      const gradeRef = useRef(null);
+      useEffect(() => {
+        const trend = new Chart(trendRef.current, { type: 'line', data: { labels: [...history.map(h => `Sem ${h.sem}`), 'Current'], datasets: [{ label: 'SGPA Trend', data: [...history.map(h => Number(h.sgpa) || 0), currentSgpa], borderColor: '#00BCD4', backgroundColor: 'rgba(0,188,212,.15)', tension: .35, fill: true }] }, options: { responsive: true, plugins: { legend: { display: false } } } });
+        const counts = {};
+        subjects.forEach(s => {
+          const m = marks[marksKey(profile, s.id)] || marks[s.id] || {};
+          const g = gradeForMarks(Number(m.unit || 0) + Number(m.mid || 0) + Number(m.end || 0), grades).grade;
+          counts[g] = (counts[g] || 0) + 1;
+        });
+        const grade = new Chart(gradeRef.current, { type: 'doughnut', data: { labels: Object.keys(counts), datasets: [{ data: Object.values(counts), backgroundColor: ['#00BCD4', '#87CEEB', '#17313B', '#F5F0E6', '#5FB5C9'] }] }, options: { responsive: true } });
+        return () => { trend.destroy(); grade.destroy(); };
+      }, [history, subjects, marks, grades, currentSgpa]);
+      return React.createElement('div', { className: 'grid gap-6 lg:grid-cols-2' },
+        React.createElement('div', { className: 'rounded-xl bg-white p-6 shadow-academic' }, React.createElement('h2', { className: 'mb-5 text-xl font-black' }, 'Semester-wise SGPA Trend'), React.createElement('canvas', { ref: trendRef })),
+        React.createElement('div', { className: 'rounded-xl bg-white p-6 shadow-academic' }, React.createElement('h2', { className: 'mb-5 text-xl font-black' }, 'Grade Distribution'), React.createElement('canvas', { ref: gradeRef })),
+        React.createElement('div', { className: 'rounded-xl bg-white p-6 shadow-academic lg:col-span-2' },
+          React.createElement('h2', { className: 'text-xl font-black' }, 'CGPA Growth & Subject Performance'),
+          React.createElement('div', { className: 'mt-5 grid gap-4 md:grid-cols-3' },
+            React.createElement(MetricCard, { label: 'CGPA Growth', value: cgpa.toFixed(2), tone: 'cyan' }),
+            React.createElement(MetricCard, { label: 'Credits Earned', value: history.reduce((sum, h) => sum + (Number(h.credits) || 0), 0), tone: 'blue' }),
+            React.createElement(MetricCard, { label: 'Subject Performance', value: currentSgpa >= 8 ? 'Strong' : currentSgpa >= 6 ? 'Stable' : 'Needs Focus', tone: 'cyan' })
+          )
+        )
+      );
+    }
+
+    function AIAssistant({ chat, setChat, profile, subjects, currentSgpa, cgpa }) {
+      const [message, setMessage] = useState('How can I achieve 9 SGPA in Semester 7?');
+      const reply = text => {
+        const subjectNames = subjects.map(s => s.name).join(', ');
+        return `Roadmap for ${profile?.name || 'you'}: aim for weekly revision blocks across ${subjectNames}. With current SGPA ${currentSgpa.toFixed(2)} and CGPA ${cgpa.toFixed(2)}, prioritize high-credit subjects first, target 80%+ in internal marks, reserve two mock-test cycles before end-term, and review weak units every Sunday. For backlog recovery, cap new material daily and keep one fixed backlog slot.`;
+      };
+      const send = e => {
+        e.preventDefault();
+        if (!message.trim()) return;
+        setChat([...chat, { role: 'student', text: message }, { role: 'assistant', text: reply(message) }]);
+        setMessage('');
+      };
+      return React.createElement('div', { className: 'rounded-xl bg-white p-6 shadow-academic' },
+        React.createElement('h2', { className: 'text-2xl font-black text-ink' }, 'AI Academic Assistant'),
+        React.createElement('div', { className: 'mt-5 max-h-[430px] space-y-3 overflow-y-auto rounded-lg bg-parchment p-4 scrollbar-thin' },
+          chat.map((item, index) => React.createElement('div', { key: index, className: `max-w-[86%] rounded-lg p-4 text-sm leading-6 ${item.role === 'student' ? 'ml-auto bg-cyanbrand text-white' : 'bg-white text-ink shadow-sm'}` }, item.text))
+        ),
+        React.createElement('form', { onSubmit: send, className: 'mt-4 flex gap-3' },
+          React.createElement('input', { value: message, onChange: e => setMessage(e.target.value), className: 'min-w-0 flex-1 rounded-lg border border-creamline px-4 py-3 outline-none focus:ring-4 focus:ring-cyanbrand/20' }),
+          React.createElement('button', { className: 'rounded-lg bg-cyanbrand px-5 py-3 font-extrabold text-white' }, 'Send')
+        )
+      );
+    }
+
+    function Report({ profile, history, subjects, marks, grades, currentSgpa, cgpa, predictor }) {
+      const download = () => {
+        const doc = new jsPDF();
+        doc.setFontSize(18);
+        doc.text('ADYPU CGPA & SGPA Predictor Report', 14, 18);
+        doc.setFontSize(11);
+        const lines = [
+          `Student: ${profile?.name || ''}`,
+          `PRN: ${profile?.prn || ''}`,
+          `Branch: ${profile?.branch || ''}`,
+          `Semester: ${profile?.semester || ''}`,
+          `SGPA: ${currentSgpa.toFixed(2)}`,
+          `CGPA: ${cgpa.toFixed(2)}`,
+          `Predicted required SGPA: ${predictor.requiredSgpa.toFixed(2)}`,
+          '',
+          'Subject Performance:'
+        ];
+        subjects.forEach(subject => {
+          const m = marks[marksKey(profile, subject.id)] || marks[subject.id] || {};
+          const total = Number(m.unit || 0) + Number(m.mid || 0) + Number(m.end || 0);
+          const g = gradeForMarks(total, grades);
+          lines.push(`${subject.name}: ${total}/120, Grade ${g.grade}, GP ${g.gp}`);
+        });
+        lines.push('', `AI Recommendation: ${predictor.recommendation}`);
+        doc.text(lines, 14, 30);
+        doc.save('ADYPU-academic-report.pdf');
+      };
+      return React.createElement('div', { className: 'rounded-xl bg-white p-6 shadow-academic' },
+        React.createElement('h2', { className: 'text-2xl font-black text-ink' }, 'Report Generation'),
+        React.createElement('p', { className: 'mt-3 max-w-3xl leading-7 text-slateblue' }, 'Generate a downloadable PDF containing student information, semester performance, SGPA, CGPA, predicted CGPA requirements, marks analysis, and AI recommendations.'),
+        React.createElement('button', { onClick: download, className: 'mt-6 rounded-lg bg-cyanbrand px-6 py-3 font-extrabold text-white shadow-soft' }, 'Download PDF Report')
+      );
+    }
+
+    function AdminPanel({ user, profile, setProfile, curriculum, setCurriculum, grades, setGrades, verificationRequests, setVerificationRequests, leaderboardStudents, setLeaderboardStudents, paperRequests, setPaperRequests, questionPapers, setQuestionPapers }) {
+      const [branch, setBranch] = useState('Computer Engineering');
+      const [sem, setSem] = useState('7');
+      const [subject, setSubject] = useState({ name: '', credits: 3 });
+      const pending = verificationRequests.filter(req => req.status === 'Pending' || req.status === 'Re-upload Requested');
+      const pendingPapers = paperRequests.filter(req => req.status === 'Pending');
+      const addSubject = () => {
+        if (!subject.name.trim()) return;
+        const next = structuredClone(curriculum);
+        next[branch] = next[branch] || {};
+        next[branch][sem] = next[branch][sem] || [];
+        next[branch][sem].push({ id: `${branch}-${sem}-${Date.now()}`, name: subject.name, credits: Number(subject.credits) || 0 });
+        setCurriculum(next);
+        setSubject({ name: '', credits: 3 });
+      };
+      const updateGrade = (index, key, value) => {
+        const next = [...grades];
+        next[index] = { ...next[index], [key]: key === 'grade' ? value : Number(value) };
+        setGrades(next);
+      };
+      const reviewRequest = (request, status) => {
+        const reviewed = verificationRequests.map(req => req.id === request.id ? { ...req, status, reviewedAt: new Date().toISOString() } : req);
+        setVerificationRequests(reviewed);
+        if (status === 'Approved') {
+          const verifiedStudent = {
+            id: request.studentKey,
+            name: request.name,
+            prn: request.prn,
+            branch: request.branch,
+            year: request.year,
+            semester: request.semester,
+            actualCgpa: Number(request.submittedCgpa || 0),
+            credits: Number(request.credits || 0),
+            verified: true
+          };
+          setLeaderboardStudents([verifiedStudent, ...leaderboardStudents.filter(student => student.id !== request.studentKey)]);
+          if (request.studentKey === studentKey(user, profile)) setProfile({ ...profile, verified: true });
+        }
+      };
+      const reviewPaper = (request, status) => {
+        setPaperRequests(paperRequests.map(req => req.id === request.id ? { ...req, status, reviewedAt: new Date().toISOString() } : req));
+        if (status === 'Approved') {
+          setQuestionPapers([{ ...request, status: 'Approved', approvedAt: new Date().toISOString() }, ...questionPapers.filter(paper => paper.id !== request.id)]);
+        }
+      };
+      return React.createElement('main', { className: 'mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8' },
+        React.createElement('h1', { className: 'text-3xl font-black text-ink' }, 'Admin Panel'),
+        React.createElement('div', { className: 'mt-6 rounded-xl bg-white p-6 shadow-academic' },
+          React.createElement('div', { className: 'flex flex-col justify-between gap-3 md:flex-row md:items-center' },
+            React.createElement('div', null,
+              React.createElement('h2', { className: 'text-xl font-black' }, 'Pending Verification Requests'),
+              React.createElement('p', { className: 'mt-1 text-sm text-slateblue' }, 'Approve, reject, or request re-upload. Only approved students receive verified badge and leaderboard eligibility.')
+            ),
+            React.createElement('span', { className: 'rounded-lg bg-parchment px-4 py-2 text-sm font-black text-slateblue' }, `${pending.length} pending`)
+          ),
+          React.createElement('div', { className: 'mt-5 overflow-x-auto scrollbar-thin' },
+            React.createElement('table', { className: 'w-full min-w-[920px] border-separate border-spacing-y-3' },
+              React.createElement('thead', { className: 'text-left text-sm text-slateblue' },
+                React.createElement('tr', null, ['Student Name', 'PRN / URN', 'Branch', 'Semester', 'Uploaded File Preview', 'Submitted CGPA', 'Submitted Credits', 'Status', 'Actions'].map(h => React.createElement('th', { key: h, className: 'px-3 py-2' }, h)))
+              ),
+              React.createElement('tbody', null,
+                pending.map(req => React.createElement('tr', { key: req.id, className: 'bg-parchment/70' },
+                  React.createElement('td', { className: 'rounded-l-lg px-3 py-4 font-extrabold' }, req.name),
+                  React.createElement('td', { className: 'px-3 py-4' }, req.prn),
+                  React.createElement('td', { className: 'px-3 py-4' }, req.branch),
+                  React.createElement('td', { className: 'px-3 py-4' }, `Sem ${req.semester}`),
+                  React.createElement('td', { className: 'px-3 py-4' },
+                    req.file?.type?.startsWith('image/')
+                      ? React.createElement('img', { src: req.file.dataUrl, alt: 'Marksheet preview', className: 'h-20 w-28 rounded-md object-cover bg-white' })
+                      : React.createElement('div', { className: 'rounded-md bg-white px-3 py-2 text-xs font-black text-slateblue' }, req.file?.name || 'PDF Marksheet')
+                  ),
+                  React.createElement('td', { className: 'px-3 py-4 font-black text-cyanbrand' }, Number(req.submittedCgpa).toFixed(2)),
+                  React.createElement('td', { className: 'px-3 py-4' }, req.credits),
+                  React.createElement('td', { className: 'px-3 py-4' }, req.status),
+                  React.createElement('td', { className: 'rounded-r-lg px-3 py-4' },
+                    React.createElement('div', { className: 'flex flex-wrap gap-2' },
+                      React.createElement('button', { onClick: () => reviewRequest(req, 'Approved'), className: 'rounded-md bg-emerald-600 px-3 py-2 text-xs font-black text-white' }, 'Approve'),
+                      React.createElement('button', { onClick: () => reviewRequest(req, 'Rejected'), className: 'rounded-md bg-red-600 px-3 py-2 text-xs font-black text-white' }, 'Reject'),
+                      React.createElement('button', { onClick: () => reviewRequest(req, 'Re-upload Requested'), className: 'rounded-md bg-white px-3 py-2 text-xs font-black text-ink' }, 'Request Re-upload')
+                    )
+                  )
+                )),
+                pending.length === 0 && React.createElement('tr', null, React.createElement('td', { colSpan: 9, className: 'rounded-lg bg-parchment p-6 text-center font-bold text-slateblue' }, 'No pending verification requests.'))
+              )
+            )
+          )
+        ),
+        React.createElement('div', { className: 'mt-6 rounded-xl bg-white p-6 shadow-academic' },
+          React.createElement('div', { className: 'flex flex-col justify-between gap-3 md:flex-row md:items-center' },
+            React.createElement('div', null,
+              React.createElement('h2', { className: 'text-xl font-black' }, 'Pending Question Paper Uploads'),
+              React.createElement('p', { className: 'mt-1 text-sm text-slateblue' }, 'Question papers appear publicly only after admin approval.')
+            ),
+            React.createElement('span', { className: 'rounded-lg bg-parchment px-4 py-2 text-sm font-black text-slateblue' }, `${pendingPapers.length} pending`)
+          ),
+          React.createElement('div', { className: 'mt-5 overflow-x-auto scrollbar-thin' },
+            React.createElement('table', { className: 'w-full min-w-[980px] border-separate border-spacing-y-3' },
+              React.createElement('thead', { className: 'text-left text-sm text-slateblue' },
+                React.createElement('tr', null, ['Student Name', 'Semester', 'Academic Year', 'Branch', 'Subject', 'Uploaded PDF', 'Actions'].map(h => React.createElement('th', { key: h, className: 'px-3 py-2' }, h)))
+              ),
+              React.createElement('tbody', null,
+                pendingPapers.map(req => React.createElement('tr', { key: req.id, className: 'bg-parchment/70' },
+                  React.createElement('td', { className: 'rounded-l-lg px-3 py-4 font-extrabold' }, req.uploadedBy),
+                  React.createElement('td', { className: 'px-3 py-4' }, `Sem ${req.semester}`),
+                  React.createElement('td', { className: 'px-3 py-4' }, req.year),
+                  React.createElement('td', { className: 'px-3 py-4' }, req.branch),
+                  React.createElement('td', { className: 'px-3 py-4' }, req.subject),
+                  React.createElement('td', { className: 'px-3 py-4' }, React.createElement('a', { href: req.file?.dataUrl || '#', download: req.file?.name || 'question-paper.pdf', className: 'rounded-md bg-white px-3 py-2 text-xs font-black text-cyanbrand shadow-sm' }, req.file?.name || 'PDF')),
+                  React.createElement('td', { className: 'rounded-r-lg px-3 py-4' },
+                    React.createElement('div', { className: 'flex flex-wrap gap-2' },
+                      React.createElement('button', { onClick: () => reviewPaper(req, 'Approved'), className: 'rounded-md bg-emerald-600 px-3 py-2 text-xs font-black text-white' }, 'Approve'),
+                      React.createElement('button', { onClick: () => reviewPaper(req, 'Rejected'), className: 'rounded-md bg-red-600 px-3 py-2 text-xs font-black text-white' }, 'Reject')
+                    )
+                  )
+                )),
+                pendingPapers.length === 0 && React.createElement('tr', null, React.createElement('td', { colSpan: 7, className: 'rounded-lg bg-parchment p-6 text-center font-bold text-slateblue' }, 'No pending question paper uploads.'))
+              )
+            )
+          )
+        ),
+        React.createElement('div', { className: 'mt-6 grid gap-6 lg:grid-cols-2' },
+          React.createElement('div', { className: 'rounded-xl bg-white p-6 shadow-academic' },
+            React.createElement('h2', { className: 'text-xl font-black' }, 'Manage Curriculum'),
+            React.createElement(SelectField, { label: 'Branch', value: branch, onChange: setBranch, options: branches }),
+            React.createElement(SelectField, { label: 'Semester', value: sem, onChange: setSem, options: Array.from({ length: 8 }, (_, i) => String(i + 1)) }),
+            React.createElement(Field, { label: 'Subject Name', value: subject.name, onChange: value => setSubject({ ...subject, name: value }) }),
+            React.createElement(Field, { label: 'Credits', value: subject.credits, onChange: value => setSubject({ ...subject, credits: value }), type: 'number' }),
+            React.createElement('button', { onClick: addSubject, className: 'mt-5 rounded-lg bg-cyanbrand px-5 py-3 font-extrabold text-white' }, 'Add Subject'),
+            React.createElement('div', { className: 'mt-5 space-y-2' }, (curriculum[branch]?.[sem] || []).map(s => React.createElement('div', { key: s.id, className: 'flex justify-between rounded-lg bg-parchment p-3 font-bold' }, React.createElement('span', null, s.name), React.createElement('span', null, `${s.credits} credits`))))
+          ),
+          React.createElement('div', { className: 'rounded-xl bg-white p-6 shadow-academic' },
+            React.createElement('h2', { className: 'text-xl font-black' }, 'Manage Grade Rules'),
+            React.createElement('div', { className: 'mt-4 space-y-3' }, grades.map((rule, index) => React.createElement('div', { key: index, className: 'grid grid-cols-4 gap-2 rounded-lg bg-parchment p-3' },
+              ['min', 'max', 'grade', 'gp'].map(key => React.createElement('input', { key, value: rule[key], onChange: e => updateGrade(index, key, e.target.value), className: 'min-w-0 rounded-md border border-creamline px-3 py-2' }))
+            )))
+          )
+        )
+      );
+    }
+
+    export default function App() {
+      return React.createElement(AppShell);
+    }
+  
+

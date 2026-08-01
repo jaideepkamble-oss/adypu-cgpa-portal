@@ -1,0 +1,20 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Manrope:wght@500;600;700;800&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+    * { box-sizing: border-box; }
+    body { font-family: Inter, Manrope, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #F5F0E6; color: #17313B; }
+    .glass { background: rgba(255,255,255,.74); backdrop-filter: blur(18px); border: 1px solid rgba(255,255,255,.78); }
+    .mesh {
+      background:
+        radial-gradient(circle at 12% 6%, rgba(135,206,235,.58), transparent 26%),
+        radial-gradient(circle at 84% 16%, rgba(0,188,212,.22), transparent 30%),
+        linear-gradient(135deg, #F5F0E6 0%, #FFFFFF 42%, #E6F8FD 100%);
+    }
+    .premium-card { border-radius: 18px; background: rgba(255,255,255,.82); box-shadow: 0 22px 70px rgba(23,49,59,.13); border: 1px solid rgba(255,255,255,.72); }
+    .scrollbar-thin::-webkit-scrollbar { width: 8px; height: 8px; }
+    .scrollbar-thin::-webkit-scrollbar-thumb { background: #B7DDEB; border-radius: 999px; }
+    .fade-in { animation: fadeIn .45s ease both; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
