@@ -1,9 +1,24 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Routes, Route, useLocation, useNavigate } from 'react-router-dom';
-import Chart from 'chart.js/auto';
-import { jsPDF } from 'jspdf';
+import { Navigate, Routes, Route, useLocation, useNavigate } from 'react-router-dom';
 import './styles.css';
 import { Field, MetricCard, SelectField } from './components/ui.jsx';
+import {
+  clearStoredAuthUser,
+  getStoredAuthUser,
+  getUserRecord,
+  listDocuments,
+  loginWithEmail,
+  loginWithGoogle,
+  registerWithEmail,
+  saveAcademicData,
+  saveLeaderboardStudent,
+  saveNotification,
+  savePaperRequest,
+  saveUserRecord,
+  saveVerificationRequest,
+  sendPasswordReset,
+  storeAuthUser
+} from './services/firebase.js';
 const storage = {
       get(key, fallback) {
         try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; }
@@ -164,15 +179,10 @@ const storage = {
     }
 
     async function firebaseAuthAction(type, payload) {
-      // Firebase is intentionally not implemented in this Vite migration.
-      // This local auth shim preserves the existing UI flow until Firebase is added later.
-      if (type === 'register' || type === 'login' || type === 'google') {
-        return {
-          uid: payload.email || 'local-google-user',
-          email: payload.email || 'student.google@adypu.edu.in',
-          displayName: payload.name || 'ADYPU Student'
-        };
-      }
+      if (type === 'register') return registerWithEmail(payload);
+      if (type === 'login') return loginWithEmail(payload);
+      if (type === 'google') return loginWithGoogle();
+      if (type === 'forgot') return sendPasswordReset(payload.email);
       return null;
     }
 
@@ -214,12 +224,21 @@ const storage = {
       return email;
     }
 
+    function ProtectedRoute({ user, children }) {
+      return user ? children : React.createElement(Navigate, { to: '/auth', replace: true });
+    }
+
+    function AdminRoute({ user, children }) {
+      if (!user) return React.createElement(Navigate, { to: '/auth', replace: true });
+      return user.role === 'admin' ? children : React.createElement(Navigate, { to: '/dashboard', replace: true });
+    }
+
     function AppShell() {
       const navigate = useNavigate();
       const location = useLocation();
       const routeFromPath = location.pathname.replace(/^\//, '') || 'landing';
       const route = routeFromPath;
-      const [user, setUser] = useState(storage.get('portal:user', null));
+      const [user, setUser] = useState(getStoredAuthUser() || storage.get('portal:user', null));
       const [profile, setProfile] = useState(storage.get('portal:profile', null));
       const [curriculum, setCurriculum] = useState(storage.get('portal:curriculum', initialCurriculum));
       const [grades, setGrades] = useState(storage.get('portal:grades', defaultGrades));
@@ -234,6 +253,7 @@ const storage = {
         { role: 'assistant', text: 'Hi. Share your target SGPA or concern, and I will build a study roadmap around your current subjects and CGPA.' }
       ]));
       const [authMode, setAuthMode] = useState('login');
+      const [firebaseStatus, setFirebaseStatus] = useState('');
       useEffect(() => storage.set('portal:user', user), [user]);
       useEffect(() => storage.set('portal:profile', profile), [profile]);
       useEffect(() => storage.set('portal:curriculum', curriculum), [curriculum]);
@@ -246,6 +266,9 @@ const storage = {
       useEffect(() => storage.set('portal:questionPapers', questionPapers), [questionPapers]);
       useEffect(() => storage.set('portal:target', targetCgpa), [targetCgpa]);
       useEffect(() => storage.set('portal:chat', chat), [chat]);
+      useEffect(() => {
+        if (user) storeAuthUser(user);
+      }, [user]);
       useEffect(() => {
         const sem7 = curriculum['Computer Engineering']?.[7] || [];
         const isOriginalDemo = sem7.length === 4 && sem7.some(s => s.id === 'sem7-cloud' && Number(s.credits) === 3) && !sem7.some(s => s.id === 'sem7-project');
@@ -286,6 +309,20 @@ const storage = {
         });
       }, [user, profile, targetCgpa, currentSgpa, updatedCgpa, credits, currentCredits, allSubjectsComplete]);
 
+      useEffect(() => {
+        if (!user?.idToken) return;
+        saveAcademicData(user, {
+          profile,
+          marks: getStudentMarks(allMarks, user, profile),
+          targetCgpa,
+          currentSgpa,
+          updatedCgpa,
+          credits,
+          currentCredits,
+          allSubjectsComplete
+        }).catch(error => setFirebaseStatus(error.message));
+      }, [user, profile, allMarks, targetCgpa, currentSgpa, updatedCgpa, credits, currentCredits, allSubjectsComplete]);
+
       const performAuth = async (mode, payload) => {
         const firebaseUser = await firebaseAuthAction(mode, payload);
         if (mode === 'register') sendWelcomeVerificationEmail(payload);
@@ -293,10 +330,27 @@ const storage = {
           uid: firebaseUser?.uid || payload.email || `local-${Date.now()}`,
           email: firebaseUser?.email || payload.email || 'student.google@adypu.edu.in',
           name: firebaseUser?.displayName || payload.name || 'ADYPU Student',
+          role: firebaseUser?.role || 'student',
+          idToken: firebaseUser?.idToken,
+          refreshToken: firebaseUser?.refreshToken,
+          emailVerified: firebaseUser?.emailVerified,
           provider: mode === 'google' ? 'Google' : 'Email'
         };
+        const record = firebaseUser?.idToken ? await getUserRecord(loggedIn).catch(() => null) : null;
+        const loadedVerificationRequests = firebaseUser?.idToken ? await listDocuments('verificationRequests', loggedIn).catch(() => []) : [];
+        const loadedPapers = firebaseUser?.idToken ? await listDocuments('papers', loggedIn).catch(() => []) : [];
+        const loadedLeaderboard = firebaseUser?.idToken ? await listDocuments('leaderboard', loggedIn).catch(() => []) : [];
+        const loadedProfile = record?.profile?.profile || record?.profile || null;
+        if (loadedProfile) setProfile(loadedProfile);
+        if (loadedVerificationRequests.length) setVerificationRequests(loadedVerificationRequests);
+        if (loadedPapers.length) {
+          setPaperRequests(loadedPapers.filter(paper => paper.status !== 'Approved'));
+          setQuestionPapers(loadedPapers.filter(paper => paper.status === 'Approved'));
+        }
+        if (loadedLeaderboard.length) setLeaderboardStudents(loadedLeaderboard);
         setUser(loggedIn);
-        go(profile ? 'dashboard' : 'profile');
+        storage.set('portal:user', loggedIn);
+        go(loadedProfile || profile ? 'dashboard' : 'profile');
       };
 
       const updateStudentMarks = nextMarks => {
@@ -305,13 +359,13 @@ const storage = {
       };
 
       return React.createElement('div', { className: 'min-h-screen mesh' },
-        React.createElement(Header, { user, profile, route, go, logout: () => { setUser(null); go('landing'); } }),
+        React.createElement(Header, { user, profile, route, go, logout: () => { setUser(null); clearStoredAuthUser(); storage.set('portal:user', null); go('landing'); } }),
         React.createElement(Routes, null,
           React.createElement(Route, { path: '/', element: React.createElement(Landing, { go }) }),
           React.createElement(Route, { path: '/auth', element: React.createElement(Auth, { authMode, setAuthMode, performAuth, go }) }),
-          React.createElement(Route, { path: '/profile', element: React.createElement(ProfileSetup, { user, profile, setProfile, go }) }),
-          React.createElement(Route, { path: '/dashboard', element: React.createElement(Dashboard, { user, profile, setProfile, history, setHistory, subjects, marks, setMarks: updateStudentMarks, grades, currentSgpa, updatedCgpa, credits, currentCredits, allSubjectsComplete, targetCgpa, setTargetCgpa, chat, setChat, go, verificationRequests, setVerificationRequests, leaderboardStudents, curriculum, paperRequests, setPaperRequests, questionPapers }) }),
-          React.createElement(Route, { path: '/admin', element: React.createElement(AdminPanel, { user, profile, setProfile, curriculum, setCurriculum, grades, setGrades, verificationRequests, setVerificationRequests, leaderboardStudents, setLeaderboardStudents, paperRequests, setPaperRequests, questionPapers, setQuestionPapers }) })
+          React.createElement(Route, { path: '/profile', element: React.createElement(ProtectedRoute, { user }, React.createElement(ProfileSetup, { user, profile, setProfile, go })) }),
+          React.createElement(Route, { path: '/dashboard', element: React.createElement(ProtectedRoute, { user }, React.createElement(Dashboard, { user, profile, setProfile, history, setHistory, subjects, marks, setMarks: updateStudentMarks, grades, currentSgpa, updatedCgpa, credits, currentCredits, allSubjectsComplete, targetCgpa, setTargetCgpa, chat, setChat, go, verificationRequests, setVerificationRequests, leaderboardStudents, curriculum, paperRequests, setPaperRequests, questionPapers, firebaseStatus })) }),
+          React.createElement(Route, { path: '/admin', element: React.createElement(AdminRoute, { user }, React.createElement(AdminPanel, { user, profile, setProfile, curriculum, setCurriculum, grades, setGrades, verificationRequests, setVerificationRequests, leaderboardStudents, setLeaderboardStudents, paperRequests, setPaperRequests, questionPapers, setQuestionPapers })) })
         )
       );
     }
@@ -410,6 +464,17 @@ const storage = {
           setError(err?.message || 'Authentication failed. Check your credentials and try again.');
         }
       };
+      const forgotPassword = async () => {
+        setError('');
+        setSuccess('');
+        if (!email.includes('@')) return setError('Enter your email address first.');
+        try {
+          await performAuth('forgot', { email });
+          setSuccess('Password reset email sent. Check your inbox.');
+        } catch (err) {
+          setError(err?.message || 'Could not send password reset email.');
+        }
+      };
       const googleLogin = async () => {
         setError('');
         try {
@@ -437,7 +502,8 @@ const storage = {
             error && React.createElement('p', { className: 'mt-3 rounded-lg bg-red-50 p-3 text-sm font-bold text-red-700' }, error),
             success && React.createElement('p', { className: 'mt-3 rounded-lg bg-emerald-50 p-3 text-sm font-bold text-emerald-700' }, success),
             React.createElement('button', { className: 'mt-5 w-full rounded-lg bg-cyanbrand px-5 py-3 font-extrabold text-white shadow-soft' }, authMode === 'register' ? 'Register' : 'Login using Email and Password'),
-            React.createElement('button', { type: 'button', onClick: googleLogin, className: 'mt-3 w-full rounded-lg border border-skysoft bg-white px-5 py-3 font-extrabold text-ink' }, 'Continue with Google')
+            React.createElement('button', { type: 'button', onClick: googleLogin, className: 'mt-3 w-full rounded-lg border border-skysoft bg-white px-5 py-3 font-extrabold text-ink' }, 'Continue with Google'),
+            React.createElement('button', { type: 'button', onClick: forgotPassword, className: 'mt-4 text-sm font-bold text-cyanbrand' }, 'Forgot Password?')
           )
         )
       );
@@ -450,12 +516,18 @@ const storage = {
       const validSemesters = semestersByYear[draft.year] || [];
       const previousLabel = previousSemesterText(draft.semester);
       const setYear = value => setDraft({ ...draft, year: value, semester: semestersByYear[value][0] });
-      const save = e => {
+      const save = async e => {
         e.preventDefault();
         setError('');
         if (!draft.name.trim() || !draft.prn.trim()) return setError('Full Name and PRN / URN Number are required.');
         if (!draft.actualCgpa || Number(draft.actualCgpa) < 0 || Number(draft.actualCgpa) > 10) return setError('Enter your ACTUAL CGPA between 0 and 10.');
         if (!draft.creditsEarned || Number(draft.creditsEarned) <= 0) return setError('Enter your ACTUAL total earned credits.');
+        try {
+          if (user?.idToken) await saveUserRecord(user, { profile: draft });
+        } catch (err) {
+          setError(err?.message || 'Could not save profile to Firestore.');
+          return;
+        }
         setProfile(draft);
         go('dashboard');
       };
@@ -676,7 +748,7 @@ const storage = {
                 React.createElement('td', { className: 'px-3 py-4' }, `Sem ${paper.semester}`),
                 React.createElement('td', { className: 'px-3 py-4' }, paper.uploadedBy),
                 React.createElement('td', { className: 'px-3 py-4' }, new Date(paper.uploadDate).toLocaleDateString()),
-                React.createElement('td', { className: 'rounded-r-lg px-3 py-4' }, React.createElement('a', { href: paper.file?.dataUrl || '#', download: paper.file?.name || 'question-paper.pdf', className: 'rounded-md bg-white px-3 py-2 text-xs font-black text-cyanbrand shadow-sm' }, 'Download'))
+                React.createElement('td', { className: 'rounded-r-lg px-3 py-4' }, React.createElement('span', { className: 'rounded-md bg-white px-3 py-2 text-xs font-black text-slateblue shadow-sm' }, paper.file?.storageDisabled ? 'Storage disabled' : 'Download'))
               )),
               approved.length === 0 && React.createElement('tr', null, React.createElement('td', { colSpan: 7, className: 'rounded-lg bg-parchment p-6 text-center font-bold text-slateblue' }, 'No approved papers found for these filters yet.'))
             )
@@ -701,18 +773,14 @@ const storage = {
           setStatus('Only PDF question papers are allowed.');
           return;
         }
-        const reader = new FileReader();
-        reader.onload = () => {
-          setFile({ name: selected.name, type: selected.type, size: selected.size, dataUrl: reader.result, uploadedAt: new Date().toISOString() });
-          setStatus('PDF ready for admin review.');
-        };
-        reader.readAsDataURL(selected);
+        setFile({ name: selected.name, type: selected.type, size: selected.size, storageDisabled: true, uploadedAt: new Date().toISOString() });
+        setStatus('PDF validated. Firebase Storage is disabled, so only metadata will be submitted for admin review.');
       };
-      const submit = e => {
+      const submit = async e => {
         e.preventDefault();
         setMessage('');
         if (!file) return setMessage('Upload a PDF question paper before submitting.');
-        setPaperRequests([...paperRequests, {
+        const request = {
           id: `paper-${Date.now()}`,
           studentKey: studentKey(user, profile),
           uploadedBy: profile?.name || user?.name || 'ADYPU Student',
@@ -724,7 +792,13 @@ const storage = {
           file,
           status: 'Pending',
           uploadDate: new Date().toISOString()
-        }]);
+        };
+        try {
+          if (user?.idToken) await savePaperRequest(user, request);
+        } catch (err) {
+          return setMessage(err?.message || 'Could not submit question paper to Firestore.');
+        }
+        setPaperRequests([...paperRequests, request]);
         setMessage('Question paper submitted to Admin Dashboard for approval.');
         setFile(null);
       };
@@ -759,12 +833,8 @@ const storage = {
           setStatus('Unsupported file format. Upload PDF, JPG, JPEG, or PNG only.');
           return;
         }
-        const reader = new FileReader();
-        reader.onload = () => {
-          setFile({ name: selected.name, type: selected.type, size: selected.size, dataUrl: reader.result, uploadedAt: new Date().toISOString() });
-          setStatus('Upload ready. File preview generated.');
-        };
-        reader.readAsDataURL(selected);
+        setFile({ name: selected.name, type: selected.type, size: selected.size, storageDisabled: true, uploadedAt: new Date().toISOString() });
+        setStatus('File validated. Firebase Storage is disabled, so only file metadata will be submitted for admin review.');
       };
       const onDrop = e => {
         e.preventDefault();
@@ -790,10 +860,9 @@ const storage = {
               React.createElement('p', { className: 'font-black text-ink' }, file.name),
               React.createElement('p', { className: 'text-sm font-semibold text-slateblue' }, `${file.type} - ${Math.round(file.size / 1024)} KB`)
             ),
-            React.createElement('span', { className: 'rounded-lg bg-emerald-50 px-3 py-2 text-sm font-black text-emerald-700' }, 'File Preview')
+            React.createElement('span', { className: 'rounded-lg bg-emerald-50 px-3 py-2 text-sm font-black text-emerald-700' }, 'Metadata Ready')
           ),
-          file.type?.startsWith('image/') && React.createElement('img', { src: file.dataUrl, alt: 'Uploaded marksheet preview', className: 'mt-4 max-h-64 w-full rounded-lg object-contain bg-parchment' }),
-          file.type === 'application/pdf' && React.createElement('div', { className: 'mt-4 rounded-lg bg-parchment p-5 text-sm font-bold text-slateblue' }, 'PDF preview ready. Admin can open the stored file in production Firebase Storage.')
+          React.createElement('div', { className: 'mt-4 rounded-lg bg-parchment p-5 text-sm font-bold text-slateblue' }, 'Preview is temporarily disabled because Firebase Storage is not configured on the Spark plan.')
         )
       );
     }
@@ -803,7 +872,7 @@ const storage = {
       const [marksheetFile, setMarksheetFile] = useState(null);
       const [uploadStatus, setUploadStatus] = useState('');
       const [message, setMessage] = useState('');
-      const submitRequest = e => {
+      const submitRequest = async e => {
         e.preventDefault();
         setMessage('');
         if (existing) return setMessage('A verification request already exists. Duplicate requests are prevented.');
@@ -822,6 +891,11 @@ const storage = {
           status: 'Pending',
           submittedAt: new Date().toISOString()
         };
+        try {
+          if (user?.idToken) await saveVerificationRequest(user, request);
+        } catch (err) {
+          return setMessage(err?.message || 'Could not submit verification request to Firestore.');
+        }
         setVerificationRequests([...verificationRequests, request]);
         setMessage('Verification request submitted for admin review.');
       };
@@ -839,53 +913,6 @@ const storage = {
         ),
         message && React.createElement('p', { className: 'mt-4 rounded-lg bg-skysoft/25 p-3 text-sm font-black text-ink' }, message),
         React.createElement('div', { className: 'mt-5 rounded-lg bg-parchment p-4 text-sm font-semibold text-slateblue' }, 'Production storage note: uploaded documents should be stored in Firebase Storage with authenticated read rules for admins only, and request metadata should live in Firestore.')
-      );
-    }
-
-    function SubjectProgress({ completedSubjects, remainingSubjects, totalSubjects, completion }) {
-      return React.createElement('div', { className: 'rounded-xl bg-white p-6 shadow-academic' },
-        React.createElement('div', { className: 'flex flex-col justify-between gap-4 md:flex-row md:items-center' },
-          React.createElement('div', null,
-            React.createElement('h2', { className: 'text-2xl font-black text-ink' }, 'Subject Completion Progress'),
-            React.createElement('p', { className: 'mt-2 text-slateblue' }, `${completedSubjects} / ${totalSubjects} Subjects Completed`)
-          ),
-          React.createElement('div', { className: 'grid gap-3 text-right sm:grid-cols-2' },
-            React.createElement('div', { className: 'rounded-lg bg-parchment px-4 py-3' },
-              React.createElement('p', { className: 'text-xs font-bold text-slateblue' }, 'Subjects Remaining'),
-              React.createElement('p', { className: 'text-2xl font-black text-ink' }, remainingSubjects)
-            ),
-            React.createElement('div', { className: 'rounded-lg bg-cyanbrand/10 px-4 py-3' },
-              React.createElement('p', { className: 'text-xs font-bold text-slateblue' }, 'Completion'),
-              React.createElement('p', { className: 'text-2xl font-black text-cyanbrand' }, `${completion}%`)
-            )
-          )
-        ),
-        React.createElement('div', { className: 'mt-5 h-4 overflow-hidden rounded-full bg-parchment' },
-          React.createElement('div', { className: 'h-full rounded-full bg-cyanbrand transition-all', style: { width: `${completion}%` } })
-        ),
-        React.createElement('p', { className: 'mt-3 text-sm font-black text-emerald-700' }, 'All changes saved.')
-      );
-    }
-
-    function PreviousPerformance({ history, setHistory, cgpa }) {
-      const update = (index, key, value) => {
-        const next = [...history];
-        next[index] = { ...next[index], [key]: value };
-        setHistory(next);
-      };
-      return React.createElement('div', { className: 'rounded-xl bg-white p-6 shadow-academic' },
-        React.createElement('h2', { className: 'text-2xl font-black text-ink' }, 'Previous Academic Performance Entry'),
-        React.createElement('div', { className: 'mt-5 grid gap-4 md:grid-cols-2 lg:grid-cols-3' },
-          history.map((row, index) => React.createElement('div', { key: row.sem, className: 'rounded-lg bg-parchment p-4' },
-            React.createElement('h3', { className: 'font-black text-ink' }, `Sem ${row.sem}`),
-            React.createElement(Field, { label: 'SGPA', value: row.sgpa, onChange: value => update(index, 'sgpa', value), type: 'number' }),
-            React.createElement(Field, { label: 'Semester Credits', value: row.credits, onChange: value => update(index, 'credits', value), type: 'number' })
-          ))
-        ),
-        React.createElement('div', { className: 'mt-5 rounded-lg bg-cyanbrand/10 p-5' },
-          React.createElement('p', { className: 'font-bold text-slateblue' }, 'CGPA = sum(SGPA x Semester Credits) / sum(Semester Credits)'),
-          React.createElement('p', { className: 'mt-2 text-3xl font-black text-cyanbrand' }, cgpa.toFixed(2))
-        )
       );
     }
 
@@ -950,34 +977,6 @@ const storage = {
       );
     }
 
-    function Analytics({ profile, history, subjects, marks, grades, cgpa, currentSgpa }) {
-      const trendRef = useRef(null);
-      const gradeRef = useRef(null);
-      useEffect(() => {
-        const trend = new Chart(trendRef.current, { type: 'line', data: { labels: [...history.map(h => `Sem ${h.sem}`), 'Current'], datasets: [{ label: 'SGPA Trend', data: [...history.map(h => Number(h.sgpa) || 0), currentSgpa], borderColor: '#00BCD4', backgroundColor: 'rgba(0,188,212,.15)', tension: .35, fill: true }] }, options: { responsive: true, plugins: { legend: { display: false } } } });
-        const counts = {};
-        subjects.forEach(s => {
-          const m = marks[marksKey(profile, s.id)] || marks[s.id] || {};
-          const g = gradeForMarks(Number(m.unit || 0) + Number(m.mid || 0) + Number(m.end || 0), grades).grade;
-          counts[g] = (counts[g] || 0) + 1;
-        });
-        const grade = new Chart(gradeRef.current, { type: 'doughnut', data: { labels: Object.keys(counts), datasets: [{ data: Object.values(counts), backgroundColor: ['#00BCD4', '#87CEEB', '#17313B', '#F5F0E6', '#5FB5C9'] }] }, options: { responsive: true } });
-        return () => { trend.destroy(); grade.destroy(); };
-      }, [history, subjects, marks, grades, currentSgpa]);
-      return React.createElement('div', { className: 'grid gap-6 lg:grid-cols-2' },
-        React.createElement('div', { className: 'rounded-xl bg-white p-6 shadow-academic' }, React.createElement('h2', { className: 'mb-5 text-xl font-black' }, 'Semester-wise SGPA Trend'), React.createElement('canvas', { ref: trendRef })),
-        React.createElement('div', { className: 'rounded-xl bg-white p-6 shadow-academic' }, React.createElement('h2', { className: 'mb-5 text-xl font-black' }, 'Grade Distribution'), React.createElement('canvas', { ref: gradeRef })),
-        React.createElement('div', { className: 'rounded-xl bg-white p-6 shadow-academic lg:col-span-2' },
-          React.createElement('h2', { className: 'text-xl font-black' }, 'CGPA Growth & Subject Performance'),
-          React.createElement('div', { className: 'mt-5 grid gap-4 md:grid-cols-3' },
-            React.createElement(MetricCard, { label: 'CGPA Growth', value: cgpa.toFixed(2), tone: 'cyan' }),
-            React.createElement(MetricCard, { label: 'Credits Earned', value: history.reduce((sum, h) => sum + (Number(h.credits) || 0), 0), tone: 'blue' }),
-            React.createElement(MetricCard, { label: 'Subject Performance', value: currentSgpa >= 8 ? 'Strong' : currentSgpa >= 6 ? 'Stable' : 'Needs Focus', tone: 'cyan' })
-          )
-        )
-      );
-    }
-
     function AIAssistant({ chat, setChat, profile, subjects, currentSgpa, cgpa }) {
       const [message, setMessage] = useState('How can I achieve 9 SGPA in Semester 7?');
       const reply = text => {
@@ -1003,7 +1002,8 @@ const storage = {
     }
 
     function Report({ profile, history, subjects, marks, grades, currentSgpa, cgpa, predictor }) {
-      const download = () => {
+      const download = async () => {
+        const { jsPDF } = await import('jspdf');
         const doc = new jsPDF();
         doc.setFontSize(18);
         doc.text('ADYPU CGPA & SGPA Predictor Report', 14, 18);
@@ -1056,9 +1056,20 @@ const storage = {
         next[index] = { ...next[index], [key]: key === 'grade' ? value : Number(value) };
         setGrades(next);
       };
-      const reviewRequest = (request, status) => {
+      const reviewRequest = async (request, status) => {
         const reviewed = verificationRequests.map(req => req.id === request.id ? { ...req, status, reviewedAt: new Date().toISOString() } : req);
         setVerificationRequests(reviewed);
+        if (user?.idToken) {
+          await saveVerificationRequest(user, { ...request, status, reviewedAt: new Date().toISOString() }).catch(() => {});
+          await saveNotification(user, {
+            id: `notification-${request.id}-${status}`,
+            uid: request.uid || request.studentKey,
+            type: 'verification',
+            status,
+            message: `Your verification request was ${status}.`,
+            createdAt: new Date().toISOString()
+          }).catch(() => {});
+        }
         if (status === 'Approved') {
           const verifiedStudent = {
             id: request.studentKey,
@@ -1072,11 +1083,23 @@ const storage = {
             verified: true
           };
           setLeaderboardStudents([verifiedStudent, ...leaderboardStudents.filter(student => student.id !== request.studentKey)]);
+          if (user?.idToken) await saveLeaderboardStudent(user, verifiedStudent).catch(() => {});
           if (request.studentKey === studentKey(user, profile)) setProfile({ ...profile, verified: true });
         }
       };
-      const reviewPaper = (request, status) => {
+      const reviewPaper = async (request, status) => {
         setPaperRequests(paperRequests.map(req => req.id === request.id ? { ...req, status, reviewedAt: new Date().toISOString() } : req));
+        if (user?.idToken) {
+          await savePaperRequest(user, { ...request, status, reviewedAt: new Date().toISOString() }).catch(() => {});
+          await saveNotification(user, {
+            id: `notification-${request.id}-${status}`,
+            uid: request.uid || request.studentKey,
+            type: 'paper',
+            status,
+            message: `Your question paper upload was ${status}.`,
+            createdAt: new Date().toISOString()
+          }).catch(() => {});
+        }
         if (status === 'Approved') {
           setQuestionPapers([{ ...request, status: 'Approved', approvedAt: new Date().toISOString() }, ...questionPapers.filter(paper => paper.id !== request.id)]);
         }
@@ -1180,4 +1203,6 @@ const storage = {
       return React.createElement(AppShell);
     }
   
+
+
 
